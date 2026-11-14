@@ -1,4 +1,4 @@
-Layer	Pick	Why
+
 Blockchain	Cardano (Preprod testnet)	Required by the hackathon, and testnet is free
 Smart contract	Aiken	Covered in the workshops. Use it for an “approved issuers” registry and for revoking letters
 Transaction building	MeshJS or Lucid Evolution (TypeScript)	Easiest way to build and sign Cardano transactions from a web app
