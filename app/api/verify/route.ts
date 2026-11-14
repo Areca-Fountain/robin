@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabase";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getLetterOnChain } from "@/lib/cardano";
 import { isValidHash } from "@/lib/hash";
 import type { VerifyResponse } from "@/components/VerifyResult";
