@@ -15,8 +15,11 @@ import {
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 
+export type ApplicationStatus = "Pending" | "Under Review" | "Verified" | "Rejected";
+
 interface CompanyApplication {
   id: string;
+  user_id?: string | null;
   rep_name: string;
   rep_email: string;
   rep_role: string;
@@ -28,7 +31,7 @@ interface CompanyApplication {
   wallet_address: string;
   signed_message: string;
   wallet_signature: string;
-  status: "Pending" | "Verified" | "Rejected" | string;
+  status: ApplicationStatus | string;
   created_at: string;
 }
 
@@ -38,13 +41,12 @@ export default function ManageApplicationsPage() {
   const [applications, setApplications] = useState<CompanyApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"ALL" | "Pending" | "Verified" | "Rejected">("ALL");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | ApplicationStatus>("ALL");
   const [selectedApp, setSelectedApp] = useState<CompanyApplication | null>(null);
   const [activeDocTab, setActiveDocTab] = useState<DocTab>("br");
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  // Manual refresh handler
   const handleRefresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -63,7 +65,6 @@ export default function ManageApplicationsPage() {
     }
   }, []);
 
-  // Initial data fetch on mount (React 19 / ESLint compliant)
   useEffect(() => {
     let isMounted = true;
 
@@ -86,10 +87,15 @@ export default function ManageApplicationsPage() {
     };
   }, []);
 
-  // Approve or Reject Application
-  const handleStatusUpdate = async (id: string, newStatus: "Verified" | "Rejected") => {
+  // Switch Status (Pending, Under Review, Verified, Rejected)
+  const handleStatusUpdate = async (
+    id: string,
+    newStatus: ApplicationStatus,
+    silent = false
+  ) => {
     setUpdatingId(id);
-    setFeedbackMsg(null);
+    if (!silent) setFeedbackMsg(null);
+
     try {
       const { error } = await supabase
         .from("company_applications")
@@ -102,14 +108,14 @@ export default function ManageApplicationsPage() {
         prev.map((app) => (app.id === id ? { ...app, status: newStatus } : app))
       );
 
-      if (selectedApp?.id === id) {
-        setSelectedApp({ ...selectedApp, status: newStatus });
-      }
+      setSelectedApp((prev) => (prev && prev.id === id ? { ...prev, status: newStatus } : prev));
 
-      setFeedbackMsg({
-        type: "success",
-        text: `Application status successfully updated to ${newStatus}.`,
-      });
+      if (!silent) {
+        setFeedbackMsg({
+          type: "success",
+          text: `Application status switched to "${newStatus}". Registrar permissions updated automatically.`,
+        });
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to update status";
       setFeedbackMsg({ type: "error", text: msg });
@@ -118,8 +124,36 @@ export default function ManageApplicationsPage() {
     }
   };
 
-  // Direct file download handler
-  const handleDownloadDocument = async (url: string, filename: string) => {
+  // Automatically lock editing/deleting by switching Pending -> Under Review on Admin Preview
+  const handlePreviewApplication = async (app: CompanyApplication) => {
+    setActiveDocTab("br");
+    if (app.status === "Pending") {
+      const updatedApp = { ...app, status: "Under Review" };
+      setSelectedApp(updatedApp);
+      await handleStatusUpdate(app.id, "Under Review", true);
+      setFeedbackMsg({
+        type: "success",
+        text: `Opened "${app.company_name}". Status automatically locked to "Under Review".`,
+      });
+    } else {
+      setSelectedApp(app);
+    }
+  };
+
+  // Automatically lock editing/deleting by switching Pending -> Under Review on Admin Download
+  const handleDownloadDocument = async (
+    app: CompanyApplication,
+    url: string,
+    filename: string
+  ) => {
+    if (app.status === "Pending") {
+      await handleStatusUpdate(app.id, "Under Review", true);
+      setFeedbackMsg({
+        type: "success",
+        text: `Downloaded document for "${app.company_name}". Status automatically set to "Under Review".`,
+      });
+    }
+
     try {
       const response = await fetch(url);
       const blob = await response.blob();
@@ -136,7 +170,6 @@ export default function ManageApplicationsPage() {
     }
   };
 
-  // Filtered applications list
   const filteredApps = applications.filter((app) => {
     const matchesStatus = statusFilter === "ALL" || app.status === statusFilter;
     const matchesQuery =
@@ -146,10 +179,10 @@ export default function ManageApplicationsPage() {
     return matchesStatus && matchesQuery;
   });
 
-  // Summary counts
   const counts = {
     total: applications.length,
     pending: applications.filter((a) => a.status === "Pending").length,
+    underReview: applications.filter((a) => a.status === "Under Review").length,
     verified: applications.filter((a) => a.status === "Verified").length,
     rejected: applications.filter((a) => a.status === "Rejected").length,
   };
@@ -159,7 +192,13 @@ export default function ManageApplicationsPage() {
       case "Verified":
         return (
           <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-100">
-            Verified
+            Accepted / Verified
+          </Badge>
+        );
+      case "Under Review":
+        return (
+          <Badge className="bg-indigo-100 text-indigo-800 border-indigo-300 hover:bg-indigo-100">
+            Under Review
           </Badge>
         );
       case "Rejected":
@@ -212,10 +251,10 @@ export default function ManageApplicationsPage() {
               ← Back to Portal
             </Link>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900 mt-1">
-              Manage Applications
+              Manage Applications (Admin)
             </h1>
             <p className="text-slate-500 text-sm">
-              Review submitted company KYC documents, verify Cardano Lace signatures, and approve or reject applications.
+              Previewing or downloading automatically moves Pending applications to &quot;Under Review&quot; and locks registrar edits.
             </p>
           </div>
           <Button variant="outline" onClick={handleRefresh} disabled={loading}>
@@ -224,22 +263,28 @@ export default function ManageApplicationsPage() {
         </div>
 
         {/* Summary Metric Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Total Submissions</CardDescription>
+              <CardDescription>Total</CardDescription>
               <CardTitle className="text-2xl">{counts.total}</CardTitle>
             </CardHeader>
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Pending Review</CardDescription>
+              <CardDescription>Pending</CardDescription>
               <CardTitle className="text-2xl text-amber-600">{counts.pending}</CardTitle>
             </CardHeader>
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Approved / Verified</CardDescription>
+              <CardDescription>Under Review</CardDescription>
+              <CardTitle className="text-2xl text-indigo-600">{counts.underReview}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Accepted</CardDescription>
               <CardTitle className="text-2xl text-emerald-600">{counts.verified}</CardTitle>
             </CardHeader>
           </Card>
@@ -274,7 +319,7 @@ export default function ManageApplicationsPage() {
               className="sm:max-w-md"
             />
             <div className="flex flex-wrap gap-2">
-              {(["ALL", "Pending", "Verified", "Rejected"] as const).map((status) => (
+              {(["ALL", "Pending", "Under Review", "Verified", "Rejected"] as const).map((status) => (
                 <Button
                   key={status}
                   type="button"
@@ -282,7 +327,7 @@ export default function ManageApplicationsPage() {
                   variant={statusFilter === status ? "default" : "outline"}
                   onClick={() => setStatusFilter(status)}
                 >
-                  {status === "ALL" ? "All" : status}
+                  {status === "ALL" ? "All" : status === "Verified" ? "Accepted" : status}
                 </Button>
               ))}
             </div>
@@ -294,7 +339,7 @@ export default function ManageApplicationsPage() {
           <CardHeader>
             <CardTitle className="text-lg">Company Applications ({filteredApps.length})</CardTitle>
             <CardDescription>
-              Click Preview to inspect uploaded documents and wallet signature details.
+              Use Switch Status to manually toggle review stages or Approve/Reject directly.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -313,8 +358,8 @@ export default function ManageApplicationsPage() {
                     <tr className="border-b bg-slate-100/80 text-slate-600 text-xs uppercase">
                       <th className="py-3 px-4 font-semibold">Company & BR</th>
                       <th className="py-3 px-4 font-semibold">Representative</th>
-                      <th className="py-3 px-4 font-semibold">Cardano Wallet</th>
-                      <th className="py-3 px-4 font-semibold">Status</th>
+                      <th className="py-3 px-4 font-semibold">Current Status</th>
+                      <th className="py-3 px-4 font-semibold">Switch Status</th>
                       <th className="py-3 px-4 font-semibold text-right">Actions</th>
                     </tr>
                   </thead>
@@ -331,20 +376,28 @@ export default function ManageApplicationsPage() {
                             {app.rep_role} • {app.rep_email}
                           </div>
                         </td>
-                        <td className="py-3.5 px-4">
-                          <code className="text-xs bg-slate-100 px-2 py-1 rounded text-slate-700">
-                            {app.wallet_address.slice(0, 14)}...{app.wallet_address.slice(-8)}
-                          </code>
-                        </td>
                         <td className="py-3.5 px-4">{getStatusBadge(app.status)}</td>
+                        <td className="py-3.5 px-4">
+                          <select
+                            aria-label="Switch Status"
+                            value={app.status}
+                            disabled={updatingId === app.id}
+                            onChange={(e) =>
+                              handleStatusUpdate(app.id, e.target.value as ApplicationStatus)
+                            }
+                            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-800 shadow-xs focus:border-indigo-500 focus:outline-none"
+                          >
+                            <option value="Pending">1. Pending</option>
+                            <option value="Under Review">2. Under Review</option>
+                            <option value="Verified">3. Accepted (Verified)</option>
+                            <option value="Rejected">4. Rejected</option>
+                          </select>
+                        </td>
                         <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => {
-                              setSelectedApp(app);
-                              setActiveDocTab("br");
-                            }}
+                            onClick={() => handlePreviewApplication(app)}
                           >
                             Preview
                           </Button>
@@ -353,6 +406,7 @@ export default function ManageApplicationsPage() {
                             variant="outline"
                             onClick={() =>
                               handleDownloadDocument(
+                                app,
                                 app.br_document_url,
                                 `${app.company_name.replace(/\s+/g, "_")}_BR`
                               )
@@ -391,7 +445,6 @@ export default function ManageApplicationsPage() {
       {selectedApp && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden border">
-            {/* Modal Header */}
             <div className="px-6 py-4 border-b flex items-center justify-between bg-slate-50">
               <div>
                 <div className="flex items-center gap-3">
@@ -408,9 +461,7 @@ export default function ManageApplicationsPage() {
               </Button>
             </div>
 
-            {/* Modal Body */}
             <div className="p-6 overflow-y-auto space-y-6 flex-1">
-              {/* Metadata Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm bg-slate-50 p-4 rounded-xl border">
                 <div>
                   <span className="text-xs uppercase font-semibold text-slate-400 block">
@@ -443,7 +494,6 @@ export default function ManageApplicationsPage() {
 
               <Separator />
 
-              {/* Document Tabs + Download */}
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex gap-2">
@@ -477,7 +527,9 @@ export default function ManageApplicationsPage() {
                         <Button
                           size="sm"
                           variant="secondary"
-                          onClick={() => handleDownloadDocument(docInfo.url, docInfo.fileName)}
+                          onClick={() =>
+                            handleDownloadDocument(selectedApp, docInfo.url, docInfo.fileName)
+                          }
                         >
                           ↓ Download {docInfo.title}
                         </Button>
@@ -494,7 +546,6 @@ export default function ManageApplicationsPage() {
                   })()}
                 </div>
 
-                {/* Live Document Preview Frame */}
                 {(() => {
                   const docInfo = getActiveDocumentInfo(selectedApp);
                   const isImage = /\.(png|jpe?g|webp|gif)$/i.test(docInfo.url);
@@ -521,25 +572,39 @@ export default function ManageApplicationsPage() {
               </div>
             </div>
 
-            {/* Modal Footer: Approve / Reject Actions */}
-            <div className="px-6 py-4 border-t bg-slate-50 flex items-center justify-between">
-              <span className="text-xs text-slate-500">
-                Approving marks this entity as Verified in the Robin registry.
-              </span>
+            <div className="px-6 py-4 border-t bg-slate-50 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-600">Switch Status:</span>
+                <select
+                  aria-label="Modal Switch Status"
+                  value={selectedApp.status}
+                  disabled={updatingId === selectedApp.id}
+                  onChange={(e) =>
+                    handleStatusUpdate(selectedApp.id, e.target.value as ApplicationStatus)
+                  }
+                  className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-800"
+                >
+                  <option value="Pending">Pending</option>
+                  <option value="Under Review">Under Review</option>
+                  <option value="Verified">Accepted (Verified)</option>
+                  <option value="Rejected">Rejected</option>
+                </select>
+              </div>
+
               <div className="flex gap-3">
                 <Button
                   variant="destructive"
                   disabled={updatingId === selectedApp.id || selectedApp.status === "Rejected"}
                   onClick={() => handleStatusUpdate(selectedApp.id, "Rejected")}
                 >
-                  {updatingId === selectedApp.id ? "Updating..." : "Reject Application"}
+                  Reject
                 </Button>
                 <Button
                   className="bg-emerald-600 hover:bg-emerald-700 text-white"
                   disabled={updatingId === selectedApp.id || selectedApp.status === "Verified"}
                   onClick={() => handleStatusUpdate(selectedApp.id, "Verified")}
                 >
-                  {updatingId === selectedApp.id ? "Updating..." : "Approve & Verify"}
+                  Approve & Accept
                 </Button>
               </div>
             </div>
