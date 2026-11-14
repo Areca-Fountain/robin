@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { sha256Hex } from "@/lib/hash";
 import VerifyResult, { type VerifyResponse } from "@/components/VerifyResult";
 
-export default function VerifyLetterPage() {
+function VerifyLetterContent() {
   const { letterID } = useParams<{ letterID: string }>();
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -111,5 +111,23 @@ export default function VerifyLetterPage() {
         )}
       </section>
     </main>
+  );
+}
+
+// Next.js 16 (Cache Components) requires hooks that read the URL, such as
+// useParams(), to sit inside <Suspense>. This wrapper is the page's entry point.
+export default function VerifyLetterPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="mx-auto w-full max-w-2xl px-4 py-12">
+          <p className="text-sm text-zinc-500" role="status">
+            Loading…
+          </p>
+        </main>
+      }
+    >
+      <VerifyLetterContent />
+    </Suspense>
   );
 }
