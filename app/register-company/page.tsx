@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +30,7 @@ interface LaceProvider {
 
 interface SubmittedApplication {
   id: string;
+  user_id?: string | null;
   rep_name: string;
   rep_email: string;
   rep_role: string;
@@ -145,7 +147,7 @@ export default function RegisterCompanyPage() {
     return publicUrlData.publicUrl;
   };
 
-  // Submit Application
+  // Submit Application (linked to authenticated Registrar user_id)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
@@ -163,6 +165,11 @@ export default function RegisterCompanyPage() {
     setIsSubmitting(true);
 
     try {
+      // Get currently signed-in Registrar user (if logged in via Google OAuth)
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
       const repLetterUrl = await uploadFileToSupabase(repLetterFile, "letters");
       const brDocUrl = await uploadFileToSupabase(brFile, "br-docs");
       const kycDocUrl = await uploadFileToSupabase(kycFile, "kyc-docs");
@@ -171,6 +178,7 @@ export default function RegisterCompanyPage() {
         .from("company_applications")
         .insert([
           {
+            user_id: user?.id || null,
             rep_name: repName,
             rep_email: repEmail,
             rep_role: repRole,
@@ -245,16 +253,23 @@ export default function RegisterCompanyPage() {
               </div>
             </div>
 
-            <Button
-              variant="outline"
-              className="w-full"
-              onClick={() => {
-                setApplicationStatus("Draft");
-                setSubmittedData(null);
-              }}
-            >
-              Register Another Company
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => {
+                  setApplicationStatus("Draft");
+                  setSubmittedData(null);
+                }}
+              >
+                Register Another Company
+              </Button>
+              <Link href="/registrar" className="flex-1">
+                <Button className="w-full bg-indigo-600 hover:bg-indigo-700">
+                  Go to Registrar Dashboard
+                </Button>
+              </Link>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -266,11 +281,17 @@ export default function RegisterCompanyPage() {
       <div className="max-w-3xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+            <Link
+              href="/registrar"
+              className="text-xs font-semibold uppercase tracking-wider text-indigo-600 hover:text-indigo-500"
+            >
+              ← Back to Registrar Dashboard
+            </Link>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900 mt-1">
               Register Company
             </h1>
             <p className="text-slate-500 mt-1">
-              Submit representative verification, BR & KYC documents, and sign with your Cardano Lace wallet.
+              Submit representative verification, BR &amp; KYC documents, and sign with your Cardano Lace wallet.
             </p>
           </div>
           <Badge variant="secondary" className="text-xs px-3 py-1">
@@ -345,7 +366,7 @@ export default function RegisterCompanyPage() {
           {/* Section 2: Company & KYC Forms */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">2. Company & KYC Documents</CardTitle>
+              <CardTitle className="text-lg">2. Company &amp; KYC Documents</CardTitle>
               <CardDescription>
                 Upload Business Registration (BR) and Know Your Customer (KYC) documentation for entity verification.
               </CardDescription>
