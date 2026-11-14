@@ -6,7 +6,7 @@ export default function HomePage() {
     <main className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
       <div className="max-w-xl space-y-6">
         <div className="inline-block px-3 py-1 rounded-full bg-indigo-100 text-indigo-700 text-xs font-semibold tracking-wide uppercase">
-          UniHack 2026 • Cardano Blockchain
+          The Robin..🔄
         </div>
         <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
           Robin Verification Portal
