@@ -20,11 +20,13 @@ import { Separator } from "@/components/ui/separator";
 interface CompanyApplication {
   id: string;
   user_id?: string | null;
+  registrar_user_id?: string | null;
   rep_name: string;
   rep_email: string;
   rep_role: string;
   rep_letter_url: string;
   company_name: string;
+  company_email?: string;
   br_number: string;
   br_document_url: string;
   kyc_document_url: string;
@@ -35,28 +37,107 @@ interface CompanyApplication {
   created_at: string;
 }
 
+interface RegistrarProfile {
+  user_id: string;
+  registrar_type: "Individual" | "Business";
+  full_name: string;
+  private_address: string;
+  contact_number: string;
+  nic_or_br_number: string;
+  verification_doc_url: string;
+  verification_status: "Unverified" | "Pending" | "Verified" | "Rejected" | string;
+  subscription_plan: "Free" | "Premium";
+  subscription_status: string;
+}
+
+type SidebarSection =
+  | "manage-submissions"
+  | "add-submission"
+  | "profile-settings"
+  | "profile-verification"
+  | "manage-subscription";
+
 export default function RegistrarDashboardPage() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [activeSection, setActiveSection] = useState<SidebarSection>("manage-submissions");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
   const [applications, setApplications] = useState<CompanyApplication[]>([]);
   const [appsLoading, setAppsLoading] = useState(false);
-  const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(
+    null
+  );
 
-  // Lock Warning Popup Modal State
+  // Admin Review Lock Popup Modal State
   const [lockPopup, setLockPopup] = useState<{ title: string; message: string } | null>(null);
 
   // Preview & Edit Modal States
   const [previewApp, setPreviewApp] = useState<CompanyApplication | null>(null);
   const [editingApp, setEditingApp] = useState<CompanyApplication | null>(null);
-  const [editRepName, setEditRepName] = useState("");
-  const [editRepEmail, setEditRepEmail] = useState("");
-  const [editRepRole, setEditRepRole] = useState("");
   const [editCompanyName, setEditCompanyName] = useState("");
   const [editBrNumber, setEditBrNumber] = useState("");
+  const [editCompanyEmail, setEditCompanyEmail] = useState("");
+  const [editRepName, setEditRepName] = useState("");
+  const [editRepRole, setEditRepRole] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Fetch applications belonging to this authenticated registrar
+  // Add New Company Submission Form States (4-Step Registrar Workflow)
+  const [companyName, setCompanyName] = useState("");
+  const [brNumber, setBrNumber] = useState("");
+  const [repName, setRepName] = useState("");
+  const [repRole, setRepRole] = useState("");
+  const [companyEmail, setCompanyEmail] = useState("");
+  const [authLetterFile, setAuthLetterFile] = useState<File | null>(null);
+  const [brDocFile, setBrDocFile] = useState<File | null>(null);
+  const [submittingCompany, setSubmittingCompany] = useState(false);
+
+  // Registrar Profile, Verification & Subscription States
+  const [profile, setProfile] = useState<RegistrarProfile>({
+    user_id: "",
+    registrar_type: "Individual",
+    full_name: "",
+    private_address: "",
+    contact_number: "",
+    nic_or_br_number: "",
+    verification_doc_url: "",
+    verification_status: "Unverified",
+    subscription_plan: "Free",
+    subscription_status: "Active",
+  });
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  // Password Change & Delete Account States
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [updatingPassword, setUpdatingPassword] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deletingAccount, setDeletingAccount] = useState(false);
+
+  // Profile Verification Upload State
+  const [verificationFile, setVerificationFile] = useState<File | null>(null);
+  const [submittingVerification, setSubmittingVerification] = useState(false);
+
+  // Subscription State
+  const [updatingPlan, setUpdatingPlan] = useState(false);
+
+  // Helper: Upload file to Supabase Storage ("company-documents" bucket)
+  const uploadDocumentFile = async (file: File, folder: string): Promise<string> => {
+    const ext = file.name.split(".").pop() || "pdf";
+    const filePath = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("company-documents")
+      .upload(filePath, file, { upsert: true });
+
+    if (uploadError) throw uploadError;
+
+    const { data } = supabase.storage.from("company-documents").getPublicUrl(filePath);
+    return data.publicUrl;
+  };
+
+  // Load Registrar's Submitted Companies
   const loadRegistrarApplications = useCallback(async (currentUser: User) => {
     setAppsLoading(true);
     try {
@@ -66,23 +147,58 @@ export default function RegistrarDashboardPage() {
         .order("created_at", { ascending: false });
 
       if (currentUser.email) {
-        query = query.or(`user_id.eq.${currentUser.id},rep_email.eq.${currentUser.email}`);
+        query = query.or(
+          `user_id.eq.${currentUser.id},registrar_user_id.eq.${currentUser.id},rep_email.eq.${currentUser.email}`
+        );
       } else {
-        query = query.eq("user_id", currentUser.id);
+        query = query.or(`user_id.eq.${currentUser.id},registrar_user_id.eq.${currentUser.id}`);
       }
 
       const { data, error } = await query;
       if (error) throw error;
       setApplications((data as CompanyApplication[]) || []);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to load your applications";
+      const msg = err instanceof Error ? err.message : "Failed to load submissions";
       setFeedback({ type: "error", text: msg });
     } finally {
       setAppsLoading(false);
     }
   }, []);
 
-  // Listen for Google OAuth Session
+  // Load Registrar Profile
+  const loadRegistrarProfile = useCallback(async (currentUser: User) => {
+    const fallback: RegistrarProfile = {
+      user_id: currentUser.id,
+      registrar_type: "Individual",
+      full_name: currentUser.user_metadata?.full_name || "",
+      private_address: "",
+      contact_number: "",
+      nic_or_br_number: "",
+      verification_doc_url: "",
+      verification_status: "Unverified",
+      subscription_plan: "Free",
+      subscription_status: "Active",
+    };
+
+    try {
+      const { data, error } = await supabase
+        .from("registrar_profiles")
+        .select("*")
+        .eq("user_id", currentUser.id)
+        .maybeSingle();
+
+      if (!error && data) {
+        setProfile({ ...fallback, ...(data as Partial<RegistrarProfile>) });
+      } else {
+        setProfile(fallback);
+      }
+    } catch {
+      setProfile(fallback);
+    }
+    setRepName(currentUser.user_metadata?.full_name || "");
+  }, []);
+
+  // Auth Session Listener
   useEffect(() => {
     let isMounted = true;
 
@@ -93,6 +209,7 @@ export default function RegistrarDashboardPage() {
       setAuthLoading(false);
       if (currentUser) {
         loadRegistrarApplications(currentUser);
+        loadRegistrarProfile(currentUser);
       }
     });
 
@@ -103,6 +220,7 @@ export default function RegistrarDashboardPage() {
       setUser(currentUser);
       if (currentUser) {
         loadRegistrarApplications(currentUser);
+        loadRegistrarProfile(currentUser);
       } else {
         setApplications([]);
       }
@@ -112,9 +230,9 @@ export default function RegistrarDashboardPage() {
       isMounted = false;
       subscription.unsubscribe();
     };
-  }, [loadRegistrarApplications]);
+  }, [loadRegistrarApplications, loadRegistrarProfile]);
 
-  // Google Sign-In Trigger
+  // Google Login
   const handleGoogleSignIn = async () => {
     setFeedback(null);
     const { error } = await supabase.auth.signInWithOAuth({
@@ -123,9 +241,7 @@ export default function RegistrarDashboardPage() {
         redirectTo: `${window.location.origin}/registrar`,
       },
     });
-    if (error) {
-      setFeedback({ type: "error", text: error.message });
-    }
+    if (error) setFeedback({ type: "error", text: error.message });
   };
 
   // Sign Out
@@ -135,9 +251,94 @@ export default function RegistrarDashboardPage() {
     setApplications([]);
   };
 
-  // Open Edit Modal (Checks live DB status first and pops up alert if Admin is reviewing)
+  // =========================================================================
+  // 1. ADD NEW COMPANY SUBMISSION (4-STEP REGISTRAR WORKFLOW)
+  // =========================================================================
+  const handleAddCompanySubmission = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+
+    // Subscription Limit Check: Free Plan = Up to 5 submissions
+    if (profile.subscription_plan === "Free" && applications.length >= 5) {
+      setFeedback({
+        type: "error",
+        text: "Free Plan limit reached (Up to 5 submissions). Please upgrade to the Premium Plan ($10/month) for unlimited submissions.",
+      });
+      setActiveSection("manage-subscription");
+      return;
+    }
+
+    if (!authLetterFile || !brDocFile) {
+      setFeedback({
+        type: "error",
+        text: "Please upload both the Company Authorization Letter and the Company BR document.",
+      });
+      return;
+    }
+
+    if (!companyEmail.toLowerCase().endsWith("@gmail.com")) {
+      setFeedback({
+        type: "error",
+        text: "Please enter a valid Company Gmail address (@gmail.com) for company portal access.",
+      });
+      return;
+    }
+
+    setSubmittingCompany(true);
+    setFeedback(null);
+
+    try {
+      // Upload Authorization Letter & BR Document
+      const authLetterUrl = await uploadDocumentFile(authLetterFile, "auth-letters");
+      const brDocUrl = await uploadDocumentFile(brDocFile, "br-documents");
+
+      const { error } = await supabase.from("company_applications").insert({
+        user_id: user.id,
+        registrar_user_id: user.id,
+        company_name: companyName.trim(),
+        company_email: companyEmail.trim().toLowerCase(),
+        br_number: brNumber.trim(),
+        rep_name: repName.trim() || profile.full_name || "Authorized Registrar",
+        rep_email: user.email || companyEmail.trim().toLowerCase(),
+        rep_role: repRole.trim() || "Authorized Registrar",
+        rep_letter_url: authLetterUrl,
+        br_document_url: brDocUrl,
+        kyc_document_url: brDocUrl,
+        wallet_address: "Pending Company Wallet Connection",
+        signed_message: `Submitted by Registrar (${user.email}) for ${companyName.trim()}`,
+        wallet_signature: "registrar_submission",
+        status: "Pending",
+      });
+
+      if (error) throw error;
+
+      // Reset form
+      setCompanyName("");
+      setBrNumber("");
+      setRepRole("");
+      setCompanyEmail("");
+      setAuthLetterFile(null);
+      setBrDocFile(null);
+
+      setFeedback({
+        type: "success",
+        text: `Company "${companyName}" submitted! Status is Pending until Robin's Admin team verifies the BR. Once verified, logging in with ${companyEmail} will open the Company Dashboard.`,
+      });
+
+      await loadRegistrarApplications(user);
+      setActiveSection("manage-submissions");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to submit company registration";
+      setFeedback({ type: "error", text: msg });
+    } finally {
+      setSubmittingCompany(false);
+    }
+  };
+
+  // =========================================================================
+  // 2. MANAGE SUBMISSIONS: EDIT & DELETE (WITH ADMIN REVIEW LOCK POPUP)
+  // =========================================================================
   const openEditModal = async (app: CompanyApplication) => {
-    // Check live status from Supabase in case admin just clicked Preview/Download
     const { data: latest } = await supabase
       .from("company_applications")
       .select("status")
@@ -145,7 +346,6 @@ export default function RegistrarDashboardPage() {
       .single();
 
     const currentStatus = latest?.status || app.status;
-
     if (currentStatus !== app.status && user) {
       await loadRegistrarApplications(user);
     }
@@ -163,20 +363,19 @@ export default function RegistrarDashboardPage() {
       setLockPopup({
         title: "Editing Disabled",
         message:
-          "This registration application has been rejected by the admin panel and can no longer be edited. You may delete it and submit a new registration.",
+          "This application has been rejected by the admin panel and cannot be edited. You can delete it and submit a fresh application.",
       });
       return;
     }
 
     setEditingApp(app);
-    setEditRepName(app.rep_name);
-    setEditRepEmail(app.rep_email);
-    setEditRepRole(app.rep_role);
     setEditCompanyName(app.company_name);
     setEditBrNumber(app.br_number);
+    setEditCompanyEmail(app.company_email || app.rep_email);
+    setEditRepName(app.rep_name);
+    setEditRepRole(app.rep_role);
   };
 
-  // Save Edited Application (Re-verifies status is still Pending on DB level)
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingApp) return;
@@ -206,11 +405,11 @@ export default function RegistrarDashboardPage() {
       const { error } = await supabase
         .from("company_applications")
         .update({
-          rep_name: editRepName,
-          rep_email: editRepEmail,
-          rep_role: editRepRole,
-          company_name: editCompanyName,
-          br_number: editBrNumber,
+          company_name: editCompanyName.trim(),
+          br_number: editBrNumber.trim(),
+          company_email: editCompanyEmail.trim().toLowerCase(),
+          rep_name: editRepName.trim(),
+          rep_role: editRepRole.trim(),
         })
         .eq("id", editingApp.id)
         .eq("status", "Pending");
@@ -218,19 +417,17 @@ export default function RegistrarDashboardPage() {
       if (error) throw error;
 
       setEditingApp(null);
-      setFeedback({ type: "success", text: "Application details updated successfully." });
+      setFeedback({ type: "success", text: "Submission updated successfully." });
       if (user) await loadRegistrarApplications(user);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to update application";
+      const msg = err instanceof Error ? err.message : "Failed to update submission";
       setFeedback({ type: "error", text: msg });
     } finally {
       setSavingEdit(false);
     }
   };
 
-  // Delete Application (Checks live DB status and pops up alert if Admin is reviewing)
-  const handleDeleteApplication = async (app: CompanyApplication) => {
-    // Check live status from Supabase before allowing deletion
+  const handleDeleteSubmission = async (app: CompanyApplication) => {
     const { data: latest } = await supabase
       .from("company_applications")
       .select("status")
@@ -238,7 +435,6 @@ export default function RegistrarDashboardPage() {
       .single();
 
     const currentStatus = latest?.status || app.status;
-
     if (currentStatus !== app.status && user) {
       await loadRegistrarApplications(user);
     }
@@ -253,28 +449,238 @@ export default function RegistrarDashboardPage() {
     }
 
     const confirmed = window.confirm(
-      `Are you sure you want to permanently delete the application for "${app.company_name}"?`
+      `Are you sure you want to delete the submission for "${app.company_name}"?`
     );
     if (!confirmed) return;
 
     setDeletingId(app.id);
     setFeedback(null);
-
     try {
-      const { error } = await supabase
-        .from("company_applications")
-        .delete()
-        .eq("id", app.id);
-
+      const { error } = await supabase.from("company_applications").delete().eq("id", app.id);
       if (error) throw error;
-
       setApplications((prev) => prev.filter((item) => item.id !== app.id));
-      setFeedback({ type: "success", text: `Application for "${app.company_name}" deleted.` });
+      setFeedback({ type: "success", text: `Submission "${app.company_name}" removed.` });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to delete application";
+      const msg = err instanceof Error ? err.message : "Failed to delete submission";
       setFeedback({ type: "error", text: msg });
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  // =========================================================================
+  // 3. PROFILE SETTINGS (PRIVATE DETAILS, CHANGE PASSWORD, DELETE ACCOUNT)
+  // =========================================================================
+  const handleSaveProfileSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    setSavingProfile(true);
+    setFeedback(null);
+
+    try {
+      const { error } = await supabase.from("registrar_profiles").upsert(
+        {
+          user_id: user.id,
+          registrar_type: profile.registrar_type,
+          full_name: profile.full_name,
+          private_address: profile.private_address,
+          contact_number: profile.contact_number,
+          nic_or_br_number: profile.nic_or_br_number,
+          verification_doc_url: profile.verification_doc_url,
+          verification_status: profile.verification_status,
+          subscription_plan: profile.subscription_plan,
+          subscription_status: profile.subscription_status,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+
+      if (error) throw error;
+      setFeedback({
+        type: "success",
+        text: "Private profile settings saved successfully.",
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to save profile settings";
+      setFeedback({ type: "error", text: msg });
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword.length < 6) {
+      setFeedback({ type: "error", text: "Password must be at least 6 characters long." });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setFeedback({ type: "error", text: "New password and confirmation do not match." });
+      return;
+    }
+
+    setUpdatingPassword(true);
+    setFeedback(null);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      setNewPassword("");
+      setConfirmPassword("");
+      setFeedback({ type: "success", text: "Account password updated successfully." });
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Failed to update password. Note: Google OAuth-only accounts may need password recovery enabled.";
+      setFeedback({ type: "error", text: msg });
+    } finally {
+      setUpdatingPassword(false);
+    }
+  };
+
+  // Delete Registrar Account WITHOUT removing any already added companies from the system
+  const handleDeleteRegistrarAccount = async () => {
+    if (!user) return;
+    if (deleteConfirmText !== "DELETE") {
+      setFeedback({
+        type: "error",
+        text: 'Please type "DELETE" in the confirmation box to delete your registrar account.',
+      });
+      return;
+    }
+
+    setDeletingAccount(true);
+    setFeedback(null);
+    try {
+      // 1. Detach registrar user_id from submitted companies so all companies remain safely in Robin
+      await supabase
+        .from("company_applications")
+        .update({ user_id: null, registrar_user_id: null })
+        .or(`user_id.eq.${user.id},registrar_user_id.eq.${user.id}`);
+
+      // 2. Remove registrar profile record
+      await supabase.from("registrar_profiles").delete().eq("user_id", user.id);
+
+      // 3. Sign out user session
+      await supabase.auth.signOut();
+      setUser(null);
+      setApplications([]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to delete registrar account";
+      setFeedback({ type: "error", text: msg });
+    } finally {
+      setDeletingAccount(false);
+    }
+  };
+
+  // =========================================================================
+  // 4. PROFILE VERIFICATION (NIC FOR INDIVIDUALS / BR FOR BUSINESSES)
+  // =========================================================================
+  const handleSubmitProfileVerification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    if (!profile.nic_or_br_number.trim()) {
+      setFeedback({
+        type: "error",
+        text: `Please enter your ${profile.registrar_type === "Individual" ? "NIC Number" : "Business BR Number"}.`,
+      });
+      return;
+    }
+
+    setSubmittingVerification(true);
+    setFeedback(null);
+
+    try {
+      let docUrl = profile.verification_doc_url;
+      if (verificationFile) {
+        docUrl = await uploadDocumentFile(verificationFile, "registrar-kyc");
+      }
+
+      if (!docUrl) {
+        throw new Error(
+          `Please upload a clear scan/photo of your ${
+            profile.registrar_type === "Individual" ? "National Identity Card (NIC)" : "Business Registration (BR)"
+          }.`
+        );
+      }
+
+      const { error } = await supabase.from("registrar_profiles").upsert(
+        {
+          user_id: user.id,
+          registrar_type: profile.registrar_type,
+          full_name: profile.full_name,
+          private_address: profile.private_address,
+          contact_number: profile.contact_number,
+          nic_or_br_number: profile.nic_or_br_number.trim(),
+          verification_doc_url: docUrl,
+          verification_status: "Pending",
+          subscription_plan: profile.subscription_plan,
+          subscription_status: profile.subscription_status,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+
+      if (error) throw error;
+
+      setProfile((prev) => ({
+        ...prev,
+        verification_doc_url: docUrl,
+        verification_status: "Pending",
+      }));
+      setVerificationFile(null);
+      setFeedback({
+        type: "success",
+        text: "Verification documents submitted! Robin's Admin team will review your NIC/BR shortly.",
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to submit verification";
+      setFeedback({ type: "error", text: msg });
+    } finally {
+      setSubmittingVerification(false);
+    }
+  };
+
+  // =========================================================================
+  // 5. MANAGE SUBSCRIPTION (FREE: UP TO 5 | PREMIUM: $10/MO UNLIMITED)
+  // =========================================================================
+  const handleSwitchSubscription = async (plan: "Free" | "Premium") => {
+    if (!user) return;
+    setUpdatingPlan(true);
+    setFeedback(null);
+
+    try {
+      const { error } = await supabase.from("registrar_profiles").upsert(
+        {
+          user_id: user.id,
+          registrar_type: profile.registrar_type,
+          full_name: profile.full_name,
+          private_address: profile.private_address,
+          contact_number: profile.contact_number,
+          nic_or_br_number: profile.nic_or_br_number,
+          verification_doc_url: profile.verification_doc_url,
+          verification_status: profile.verification_status,
+          subscription_plan: plan,
+          subscription_status: "Active",
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+
+      if (error) throw error;
+      setProfile((prev) => ({ ...prev, subscription_plan: plan, subscription_status: "Active" }));
+      setFeedback({
+        type: "success",
+        text:
+          plan === "Premium"
+            ? "Upgraded to Premium Plan ($10/month) — Unlimited company submissions unlocked!"
+            : "Switched to Free Plan (Up to 5 company submissions).",
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to update subscription plan";
+      setFeedback({ type: "error", text: msg });
+    } finally {
+      setUpdatingPlan(false);
     }
   };
 
@@ -283,7 +689,7 @@ export default function RegistrarDashboardPage() {
       case "Verified":
         return (
           <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-100">
-            Accepted / Verified
+            Verified
           </Badge>
         );
       case "Under Review":
@@ -310,25 +716,25 @@ export default function RegistrarDashboardPage() {
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500 text-sm">
-        Checking registrar authentication...
+        Loading Robin Registrar Portal...
       </div>
     );
   }
 
-  // Unauthenticated View: Google Sign-In Gate
+  // Unauthenticated Sign-Up / Sign-In Gate (Google Login)
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
         <Card className="w-full max-w-md shadow-lg">
           <CardHeader className="text-center space-y-2">
             <Badge variant="secondary" className="mx-auto w-fit">
-              Registrar Onboarding
+              Robin Registrar Portal
             </Badge>
             <CardTitle className="text-2xl font-bold text-slate-900">
-              Sign in to Robin Portal
+              Sign up / Sign in as Registrar
             </CardTitle>
             <CardDescription>
-              Authenticate with your Google account to register companies and manage your submitted applications.
+              Individuals with NIC or Businesses with BR can register as third-party company registrars using Google Login.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -347,7 +753,7 @@ export default function RegistrarDashboardPage() {
             </Button>
             <div className="text-center">
               <Link href="/" className="text-xs text-slate-500 hover:text-slate-800">
-                ← Return to Home
+                ← Return to Robin Home
               </Link>
             </div>
           </CardContent>
@@ -356,63 +762,172 @@ export default function RegistrarDashboardPage() {
     );
   }
 
-  // Authenticated Registrar Dashboard
+  const navItems: { id: SidebarSection; label: string; badge?: string }[] = [
+    {
+      id: "manage-submissions",
+      label: "Manage Submissions",
+      badge: String(applications.length),
+    },
+    {
+      id: "add-submission",
+      label: "Add New Submissions",
+    },
+    {
+      id: "profile-settings",
+      label: "Profile Settings",
+    },
+    {
+      id: "profile-verification",
+      label: "Profile Verification",
+      badge: profile.verification_status,
+    },
+    {
+      id: "manage-subscription",
+      label: "Manage Subscription",
+      badge: profile.subscription_plan,
+    },
+  ];
+
   return (
-    <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-6xl mx-auto space-y-6">
-        {/* Top Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border shadow-xs">
-          <div>
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="text-indigo-700 border-indigo-200 bg-indigo-50">
-                Registrar Dashboard
-              </Badge>
-              <span className="text-xs text-slate-500">{user.email}</span>
+    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row">
+      {/* LEFT SIDEBAR NAVIGATION */}
+      <aside className="w-full lg:w-68 bg-slate-900 text-slate-100 flex flex-col justify-between shrink-0 lg:min-h-screen">
+        <div>
+          {/* Brand Header */}
+          <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+            <div>
+              <Link href="/" className="text-lg font-bold tracking-tight text-white">
+                Robin <span className="text-indigo-400">Registrar</span>
+              </Link>
+              <p className="text-[11px] text-slate-400 mt-0.5 truncate max-w-[180px]">
+                {user.email}
+              </p>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1">
-              Welcome, {user.user_metadata?.full_name || "Company Registrar"}
-            </h1>
-            <p className="text-slate-500 text-sm mt-0.5">
-              Submit new company registrations or track and manage your existing applications.
-            </p>
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="lg:hidden px-2.5 py-1.5 rounded bg-slate-800 text-xs text-slate-200"
+            >
+              {mobileMenuOpen ? "Close" : "Menu"}
+            </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <Link href="/register-company">
-              <Button className="bg-indigo-600 hover:bg-indigo-700">
-                + Register Company
-              </Button>
-            </Link>
+          {/* Navigation Links */}
+          <nav
+            className={`${
+              mobileMenuOpen ? "block" : "hidden"
+            } lg:block p-3 space-y-1.5`}
+          >
+            {navItems.map((item) => {
+              const isActive = activeSection === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    setFeedback(null);
+                    setActiveSection(item.id);
+                    setMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors text-left ${
+                    isActive
+                      ? "bg-indigo-600 text-white shadow-xs"
+                      : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                  }`}
+                >
+                  <span>{item.label}</span>
+                  {item.badge && (
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                        isActive
+                          ? "bg-indigo-500 text-white"
+                          : "bg-slate-800 text-slate-300"
+                      }`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+
+        {/* Sidebar Footer */}
+        <div
+          className={`${
+            mobileMenuOpen ? "block" : "hidden"
+          } lg:block p-4 border-t border-slate-800 space-y-3`}
+        >
+          <div className="bg-slate-800/80 rounded-xl p-3 text-xs space-y-1">
+            <div className="flex justify-between text-slate-400">
+              <span>Plan Quota</span>
+              <span className="text-white font-semibold">
+                {applications.length} / {profile.subscription_plan === "Free" ? "5" : "∞"}
+              </span>
+            </div>
+            <div className="w-full bg-slate-700 h-1.5 rounded-full overflow-hidden">
+              <div
+                className="bg-indigo-500 h-full transition-all"
+                style={{
+                  width:
+                    profile.subscription_plan === "Free"
+                      ? `${Math.min(100, (applications.length / 5) * 100)}%`
+                      : "100%",
+                }}
+              />
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={handleSignOut}
+            className="w-full justify-start text-slate-300 hover:text-white hover:bg-slate-800"
+          >
+            Sign Out
+          </Button>
+        </div>
+      </aside>
+
+      {/* MAIN WORKSPACE CONTENT */}
+      <main className="flex-1 p-5 sm:p-8 max-w-6xl w-full mx-auto space-y-6">
+        {/* Top Context Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-5 rounded-2xl border shadow-2xs">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
+              {navItems.find((n) => n.id === activeSection)?.label}
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+              Welcome back, {profile.full_name || user.user_metadata?.full_name || "Registrar"}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge
+              variant="outline"
+              className={
+                profile.verification_status === "Verified"
+                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                  : "bg-amber-50 text-amber-700 border-amber-200"
+              }
+            >
+              Registrar KYC: {profile.verification_status}
+            </Badge>
             <Button
+              size="sm"
               variant="outline"
               onClick={() => loadRegistrarApplications(user)}
               disabled={appsLoading}
             >
               {appsLoading ? "Refreshing..." : "Refresh"}
             </Button>
-            <Button variant="ghost" onClick={handleSignOut} className="text-slate-600">
-              Sign Out
-            </Button>
           </div>
         </div>
 
-        {/* Status Rules Info Banner */}
-        <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl px-4 py-3 text-xs text-indigo-900 flex flex-wrap gap-x-6 gap-y-1">
-          <span>
-            <strong>Pending:</strong> Edit &amp; Delete enabled
-          </span>
-          <span>
-            <strong>Under Review / Accepted:</strong> Edit &amp; Delete locked (Admin reviewing)
-          </span>
-          <span>
-            <strong>Rejected:</strong> Edit disabled, Delete enabled
-          </span>
-        </div>
-
-        {/* Feedback Banner */}
+        {/* Feedback Alert Banner */}
         {feedback && (
           <div
-            className={`px-4 py-3 rounded-lg border text-sm ${
+            className={`px-4 py-3 rounded-xl border text-sm ${
               feedback.type === "success"
                 ? "bg-emerald-50 border-emerald-200 text-emerald-800"
                 : "bg-red-50 border-red-200 text-red-700"
@@ -422,102 +937,616 @@ export default function RegistrarDashboardPage() {
           </div>
         )}
 
-        {/* Submitted Applications List */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">
-              Your Submitted Applications ({applications.length})
-            </CardTitle>
-            <CardDescription>
-              Manage applications submitted under your registrar account.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {appsLoading ? (
-              <div className="py-12 text-center text-slate-500 text-sm">
-                Loading your submitted applications...
+        {/* ===================================================================== */}
+        {/* SECTION 1: MANAGE SUBMISSIONS                                         */}
+        {/* ===================================================================== */}
+        {activeSection === "manage-submissions" && (
+          <Card>
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-lg">
+                  Submitted Company Registrations ({applications.length})
+                </CardTitle>
+                <CardDescription>
+                  Track verification status, inspect submitted BR &amp; Authorization letters, or edit pending entries.
+                </CardDescription>
               </div>
-            ) : applications.length === 0 ? (
-              <div className="py-12 text-center space-y-3">
-                <p className="text-slate-500 text-sm">
-                  You haven&apos;t registered any companies yet.
-                </p>
-                <Link href="/register-company">
-                  <Button variant="outline">Register Your First Company</Button>
-                </Link>
+              <Button
+                className="bg-indigo-600 hover:bg-indigo-700"
+                onClick={() => setActiveSection("add-submission")}
+              >
+                + Add New Submission
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {appsLoading ? (
+                <div className="py-12 text-center text-slate-500 text-sm">
+                  Loading your submissions...
+                </div>
+              ) : applications.length === 0 ? (
+                <div className="py-12 text-center space-y-3">
+                  <p className="text-slate-500 text-sm">
+                    No company submissions yet. Start by adding your first company registration.
+                  </p>
+                  <Button
+                    variant="outline"
+                    onClick={() => setActiveSection("add-submission")}
+                  >
+                    + Add New Submission
+                  </Button>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm text-left border-collapse">
+                    <thead>
+                      <tr className="border-b bg-slate-100/80 text-slate-600 text-xs uppercase">
+                        <th className="py-3 px-4 font-semibold">Company &amp; BR</th>
+                        <th className="py-3 px-4 font-semibold">Company Login Gmail</th>
+                        <th className="py-3 px-4 font-semibold">Submitted</th>
+                        <th className="py-3 px-4 font-semibold">Status</th>
+                        <th className="py-3 px-4 font-semibold text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {applications.map((app) => {
+                        const canEdit = app.status === "Pending";
+                        const canDelete = app.status === "Pending" || app.status === "Rejected";
+
+                        return (
+                          <tr key={app.id} className="hover:bg-slate-50">
+                            <td className="py-3.5 px-4">
+                              <div className="font-semibold text-slate-900">
+                                {app.company_name}
+                              </div>
+                              <div className="text-xs font-mono text-slate-500">
+                                {app.br_number}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 text-xs text-slate-700">
+                              {app.company_email || app.rep_email}
+                            </td>
+                            <td className="py-3.5 px-4 text-xs text-slate-500">
+                              {new Date(app.created_at).toLocaleDateString()}
+                            </td>
+                            <td className="py-3.5 px-4">{getStatusBadge(app.status)}</td>
+                            <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setPreviewApp(app)}
+                              >
+                                View
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                className={!canEdit ? "opacity-50 cursor-not-allowed" : ""}
+                                onClick={() => openEditModal(app)}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                disabled={deletingId === app.id}
+                                className={!canDelete ? "opacity-50 cursor-not-allowed" : ""}
+                                onClick={() => handleDeleteSubmission(app)}
+                              >
+                                {deletingId === app.id ? "..." : "Delete"}
+                              </Button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ===================================================================== */}
+        {/* SECTION 2: ADD NEW SUBMISSIONS (4-STEP WORKFLOW)                      */}
+        {/* ===================================================================== */}
+        {activeSection === "add-submission" && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">New Company Registration Submission</CardTitle>
+              <CardDescription>
+                Complete all 4 steps below. Once verified by Robin&apos;s team, logging in with the Company Gmail grants access to the Company Dashboard.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleAddCompanySubmission} className="space-y-6 max-w-2xl">
+                {/* Step 1: Basic Details */}
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-indigo-700 uppercase tracking-wider">
+                    Step 1. Basic Details of the Company
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="compName">Company Registered Name *</Label>
+                      <Input
+                        id="compName"
+                        placeholder="e.g. Acme Technologies (Pvt) Ltd"
+                        value={companyName}
+                        onChange={(e) => setCompanyName(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="brNum">Business Registration (BR) Number *</Label>
+                      <Input
+                        id="brNum"
+                        placeholder="e.g. PV 00123456"
+                        value={brNumber}
+                        onChange={(e) => setBrNumber(e.target.value)}
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="repName">Company Director / Contact Person *</Label>
+                      <Input
+                        id="repName"
+                        placeholder="Full Name"
+                        value={repName}
+                        onChange={(e) => setRepName(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="repRole">Designation *</Label>
+                      <Input
+                        id="repRole"
+                        placeholder="e.g. Managing Director"
+                        value={repRole}
+                        onChange={(e) => setRepRole(e.target.value)}
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Step 2: Authorization Letter */}
+                <div className="space-y-2">
+                  <h3 className="text-sm font-semibold text-indigo-700 uppercase tracking-wider">
+                    Step 2. Authorization Letter from the Subjective Company
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Upload the signed authorization letter permitting you to register this company on Robin.
+                  </p>
+                  <Input
+                    type="file"
+                    accept=".pdf,.png,.jpg,.jpeg"
+                    onChange={(e) => setAuthLetterFile(e.target.files?.[0] || null)}
+                    required
+                  />
+                </div>
+
+                <Separator />
+
+                {/* Step 3: Company Gmail */}
+                <div className="space-y-2">
+                  <h3 className="text-sm font-semibold text-indigo-700 uppercase tracking-wider">
+                    Step 3. Company Gmail Account (For Company Dashboard Access)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    When someone from the company logs into Robin with this Gmail address, they will automatically receive the Company Dashboard.
+                  </p>
+                  <Input
+                    type="email"
+                    placeholder="company.official@gmail.com"
+                    value={companyEmail}
+                    onChange={(e) => setCompanyEmail(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <Separator />
+
+                {/* Step 4: Submit Company BR */}
+                <div className="space-y-2">
+                  <h3 className="text-sm font-semibold text-indigo-700 uppercase tracking-wider">
+                    Step 4. Submit Company BR Document
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Verification Status will remain <strong>Pending</strong> until Robin&apos;s Admin team verifies the BR.
+                  </p>
+                  <Input
+                    type="file"
+                    accept=".pdf,.png,.jpg,.jpeg"
+                    onChange={(e) => setBrDocFile(e.target.files?.[0] || null)}
+                    required
+                  />
+                </div>
+
+                <div className="pt-2 flex items-center gap-3">
+                  <Button
+                    type="submit"
+                    disabled={submittingCompany}
+                    className="bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    {submittingCompany ? "Uploading & Submitting..." : "Submit Company Registration"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setActiveSection("manage-submissions")}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ===================================================================== */}
+        {/* SECTION 3: PROFILE SETTINGS                                           */}
+        {/* ===================================================================== */}
+        {activeSection === "profile-settings" && (
+          <div className="space-y-6 max-w-2xl">
+            {/* Private Details */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Registrar Private Information</CardTitle>
+                <CardDescription>
+                  Your Name, Address, and Contact Number are kept strictly private and are not displayed publicly.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleSaveProfileSettings} className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="pName">Full Name / Business Name *</Label>
+                      <Input
+                        id="pName"
+                        value={profile.full_name}
+                        onChange={(e) => setProfile({ ...profile, full_name: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="pPhone">Contact Number (Private) *</Label>
+                      <Input
+                        id="pPhone"
+                        placeholder="+94 77 123 4567"
+                        value={profile.contact_number}
+                        onChange={(e) =>
+                          setProfile({ ...profile, contact_number: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pAddress">Residential / Business Address (Private) *</Label>
+                    <Input
+                      id="pAddress"
+                      placeholder="No. 123, Main Street, Colombo"
+                      value={profile.private_address}
+                      onChange={(e) =>
+                        setProfile({ ...profile, private_address: e.target.value })
+                      }
+                      required
+                    />
+                  </div>
+
+                  <Button
+                    type="submit"
+                    disabled={savingProfile}
+                    className="bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    {savingProfile ? "Saving..." : "Save Profile Settings"}
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+
+            {/* Change Password */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Change Password</CardTitle>
+                <CardDescription>
+                  Set or update a password for your registrar account ({user.email}).
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleChangePassword} className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="newPass">New Password</Label>
+                      <Input
+                        id="newPass"
+                        type="password"
+                        placeholder="Min 6 characters"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="confPass">Confirm New Password</Label>
+                      <Input
+                        id="confPass"
+                        type="password"
+                        placeholder="Re-enter password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        required
+                      />
+                    </div>
+                  </div>
+                  <Button type="submit" variant="secondary" disabled={updatingPassword}>
+                    {updatingPassword ? "Updating Password..." : "Update Password"}
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+
+            {/* Delete Account (Preserves already added companies) */}
+            <Card className="border-red-200">
+              <CardHeader>
+                <CardTitle className="text-lg text-red-700">Delete Registrar Account</CardTitle>
+                <CardDescription>
+                  Deleting your registrar account will permanently close your profile,{" "}
+                  <strong>
+                    but will NOT remove any companies you have already submitted to the Robin system.
+                  </strong>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="delConfirm" className="text-xs text-slate-600">
+                    Type <strong>DELETE</strong> below to confirm account deletion:
+                  </Label>
+                  <Input
+                    id="delConfirm"
+                    placeholder="DELETE"
+                    value={deleteConfirmText}
+                    onChange={(e) => setDeleteConfirmText(e.target.value)}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={deletingAccount || deleteConfirmText !== "DELETE"}
+                  onClick={handleDeleteRegistrarAccount}
+                >
+                  {deletingAccount ? "Deleting Account..." : "Delete My Registrar Account"}
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* ===================================================================== */}
+        {/* SECTION 4: PROFILE VERIFICATION (NIC FOR INDIVIDUALS / BR FOR BUSINESS)*/}
+        {/* ===================================================================== */}
+        {activeSection === "profile-verification" && (
+          <Card className="max-w-2xl">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg">Registrar Identity Verification</CardTitle>
+                  <CardDescription>
+                    Verify your profile with your <strong>NIC</strong> (for Individuals) or{" "}
+                    <strong>BR</strong> (for Businesses).
+                  </CardDescription>
+                </div>
+                <Badge
+                  className={
+                    profile.verification_status === "Verified"
+                      ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                      : profile.verification_status === "Pending"
+                      ? "bg-amber-100 text-amber-800 border-amber-300"
+                      : "bg-slate-100 text-slate-700 border-slate-300"
+                  }
+                >
+                  {profile.verification_status}
+                </Badge>
               </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left border-collapse">
-                  <thead>
-                    <tr className="border-b bg-slate-100/80 text-slate-600 text-xs uppercase">
-                      <th className="py-3 px-4 font-semibold">Company &amp; BR</th>
-                      <th className="py-3 px-4 font-semibold">Representative</th>
-                      <th className="py-3 px-4 font-semibold">Submitted Date</th>
-                      <th className="py-3 px-4 font-semibold">Status</th>
-                      <th className="py-3 px-4 font-semibold text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {applications.map((app) => {
-                      const canEdit = app.status === "Pending";
-                      const canDelete = app.status === "Pending" || app.status === "Rejected";
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSubmitProfileVerification} className="space-y-5">
+                {/* Registrar Type Switch */}
+                <div className="space-y-2">
+                  <Label>Registrar Account Category *</Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {(["Individual", "Business"] as const).map((type) => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => setProfile({ ...profile, registrar_type: type })}
+                        className={`p-3.5 rounded-xl border text-left transition-all ${
+                          profile.registrar_type === type
+                            ? "border-indigo-600 bg-indigo-50/70 text-indigo-900 font-semibold"
+                            : "border-slate-200 hover:bg-slate-50 text-slate-700"
+                        }`}
+                      >
+                        <div className="text-sm">{type}</div>
+                        <div className="text-xs text-slate-500 font-normal mt-0.5">
+                          {type === "Individual"
+                            ? "Verify using National Identity Card (NIC)"
+                            : "Verify using Business Registration (BR)"}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-                      return (
-                        <tr key={app.id} className="hover:bg-slate-50">
-                          <td className="py-3.5 px-4">
-                            <div className="font-semibold text-slate-900">{app.company_name}</div>
-                            <div className="text-xs font-mono text-slate-500">{app.br_number}</div>
-                          </td>
-                          <td className="py-3.5 px-4">
-                            <div className="font-medium text-slate-800">{app.rep_name}</div>
-                            <div className="text-xs text-slate-500">{app.rep_role}</div>
-                          </td>
-                          <td className="py-3.5 px-4 text-xs text-slate-600">
-                            {new Date(app.created_at).toLocaleDateString()}
-                          </td>
-                          <td className="py-3.5 px-4">{getStatusBadge(app.status)}</td>
-                          <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
-                            {/* Preview */}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => setPreviewApp(app)}
-                            >
-                              Preview
-                            </Button>
+                {/* NIC or BR Number */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="nicBrNum">
+                    {profile.registrar_type === "Individual"
+                      ? "National Identity Card (NIC) Number *"
+                      : "Business Registration (BR) Number *"}
+                  </Label>
+                  <Input
+                    id="nicBrNum"
+                    placeholder={
+                      profile.registrar_type === "Individual"
+                        ? "e.g. 199912345678 or 991234567V"
+                        : "e.g. PV 00987654"
+                    }
+                    value={profile.nic_or_br_number}
+                    onChange={(e) =>
+                      setProfile({ ...profile, nic_or_br_number: e.target.value })
+                    }
+                    required
+                  />
+                </div>
 
-                            {/* Edit (Shows popup if locked) */}
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              className={!canEdit ? "opacity-50 cursor-not-allowed" : ""}
-                              onClick={() => openEditModal(app)}
-                            >
-                              Edit
-                            </Button>
+                {/* Upload NIC or BR Scan */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="kycUpload">
+                    Upload{" "}
+                    {profile.registrar_type === "Individual"
+                      ? "NIC Copy (Front & Back PDF/Image)"
+                      : "Business Registration (BR) Certificate"}{" "}
+                    *
+                  </Label>
+                  <Input
+                    id="kycUpload"
+                    type="file"
+                    accept=".pdf,.png,.jpg,.jpeg"
+                    onChange={(e) => setVerificationFile(e.target.files?.[0] || null)}
+                  />
+                  {profile.verification_doc_url && (
+                    <a
+                      href={profile.verification_doc_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-indigo-600 hover:underline inline-block mt-1"
+                    >
+                      View currently uploaded document ↗
+                    </a>
+                  )}
+                </div>
 
-                            {/* Delete (Shows popup if locked) */}
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              disabled={deletingId === app.id}
-                              className={!canDelete ? "opacity-50 cursor-not-allowed" : ""}
-                              onClick={() => handleDeleteApplication(app)}
-                            >
-                              {deletingId === app.id ? "Deleting..." : "Delete"}
-                            </Button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+                <Button
+                  type="submit"
+                  disabled={
+                    submittingVerification || profile.verification_status === "Verified"
+                  }
+                  className="bg-indigo-600 hover:bg-indigo-700"
+                >
+                  {submittingVerification
+                    ? "Submitting for Verification..."
+                    : profile.verification_status === "Verified"
+                    ? "Verified Registrar ✓"
+                    : "Submit for Verification"}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ===================================================================== */}
+        {/* SECTION 5: MANAGE SUBSCRIPTION (FREE: UP TO 5 | PREMIUM: $10/MO)      */}
+        {/* ===================================================================== */}
+        {activeSection === "manage-subscription" && (
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Subscription Usage</CardTitle>
+                <CardDescription>
+                  You are currently on the <strong>{profile.subscription_plan} Plan</strong> (
+                  {applications.length} of{" "}
+                  {profile.subscription_plan === "Free" ? "5" : "Unlimited"} submissions used).
+                </CardDescription>
+              </CardHeader>
+            </Card>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl">
+              {/* Free Plan */}
+              <Card
+                className={
+                  profile.subscription_plan === "Free"
+                    ? "border-2 border-indigo-600 shadow-md"
+                    : ""
+                }
+              >
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-xl">Free Plan</CardTitle>
+                    {profile.subscription_plan === "Free" && (
+                      <Badge className="bg-indigo-600 text-white">Current Plan</Badge>
+                    )}
+                  </div>
+                  <div className="text-3xl font-bold text-slate-900 pt-2">
+                    $0 <span className="text-sm font-normal text-slate-500">/ month</span>
+                  </div>
+                  <CardDescription>Up to 5 company submissions</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <ul className="space-y-2 text-sm text-slate-600">
+                    <li>✓ Up to 5 company registrations</li>
+                    <li>✓ Standard Admin BR &amp; Auth Letter review</li>
+                    <li>✓ Automatic Company Dashboard provisioning</li>
+                  </ul>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    disabled={profile.subscription_plan === "Free" || updatingPlan}
+                    onClick={() => handleSwitchSubscription("Free")}
+                  >
+                    {profile.subscription_plan === "Free" ? "Active Plan" : "Switch to Free"}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* Premium Plan */}
+              <Card
+                className={
+                  profile.subscription_plan === "Premium"
+                    ? "border-2 border-indigo-600 shadow-md"
+                    : ""
+                }
+              >
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-xl">Premium Plan</CardTitle>
+                    {profile.subscription_plan === "Premium" && (
+                      <Badge className="bg-indigo-600 text-white">Current Plan</Badge>
+                    )}
+                  </div>
+                  <div className="text-3xl font-bold text-slate-900 pt-2">
+                    $10 <span className="text-sm font-normal text-slate-500">/ month</span>
+                  </div>
+                  <CardDescription>Unlimited company submissions</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <ul className="space-y-2 text-sm text-slate-600">
+                    <li>✓ <strong>Unlimited</strong> company registrations</li>
+                    <li>✓ Priority verification queue for client companies</li>
+                    <li>✓ Full registrar audit &amp; status tracking</li>
+                  </ul>
+                  <Button
+                    type="button"
+                    className="w-full bg-indigo-600 hover:bg-indigo-700"
+                    disabled={profile.subscription_plan === "Premium" || updatingPlan}
+                    onClick={() => handleSwitchSubscription("Premium")}
+                  >
+                    {profile.subscription_plan === "Premium"
+                      ? "Active Plan"
+                      : updatingPlan
+                      ? "Upgrading..."
+                      : "Upgrade to Premium ($10/mo)"}
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        )}
+      </main>
 
       {/* Admin Review Lock Popup Modal */}
       {lockPopup && (
@@ -529,9 +1558,7 @@ export default function RegistrarDashboardPage() {
               </div>
               <div>
                 <h3 className="text-lg font-bold text-slate-900">{lockPopup.title}</h3>
-                <p className="text-sm text-slate-600 mt-1 leading-relaxed">
-                  {lockPopup.message}
-                </p>
+                <p className="text-sm text-slate-600 mt-1 leading-relaxed">{lockPopup.message}</p>
               </div>
             </div>
             <div className="flex justify-end pt-2">
@@ -547,7 +1574,7 @@ export default function RegistrarDashboardPage() {
         </div>
       )}
 
-      {/* Preview Modal */}
+      {/* Preview Submission Modal */}
       {previewApp && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-6 space-y-5 border max-h-[90vh] overflow-y-auto">
@@ -566,17 +1593,20 @@ export default function RegistrarDashboardPage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
               <div>
-                <span className="text-xs text-slate-400 uppercase font-semibold">Representative</span>
+                <span className="text-xs text-slate-400 uppercase font-semibold">
+                  Company Login Gmail
+                </span>
+                <p className="font-medium text-slate-900">
+                  {previewApp.company_email || previewApp.rep_email}
+                </p>
+              </div>
+              <div>
+                <span className="text-xs text-slate-400 uppercase font-semibold">
+                  Company Representative
+                </span>
                 <p className="font-medium text-slate-900">
                   {previewApp.rep_name} ({previewApp.rep_role})
                 </p>
-                <p className="text-xs text-slate-500">{previewApp.rep_email}</p>
-              </div>
-              <div>
-                <span className="text-xs text-slate-400 uppercase font-semibold">Wallet Identity</span>
-                <code className="text-xs block break-all bg-slate-100 p-1.5 rounded mt-1">
-                  {previewApp.wallet_address}
-                </code>
               </div>
             </div>
 
@@ -601,34 +1631,26 @@ export default function RegistrarDashboardPage() {
                   rel="noopener noreferrer"
                   className="px-3 py-2 rounded-lg border text-xs font-medium hover:bg-slate-50"
                 >
-                  📄 View BR Certificate ↗
-                </a>
-                <a
-                  href={previewApp.kyc_document_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-2 rounded-lg border text-xs font-medium hover:bg-slate-50"
-                >
-                  📄 View KYC Form ↗
+                  📄 View Company BR ↗
                 </a>
               </div>
             </div>
 
             <div className="flex justify-end pt-2">
               <Button variant="outline" onClick={() => setPreviewApp(null)}>
-                Close Preview
+                Close
               </Button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Edit Modal (Only accessible while Pending) */}
+      {/* Edit Submission Modal (Only accessible while Pending) */}
       {editingApp && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 space-y-5 border">
             <div className="flex items-center justify-between border-b pb-3">
-              <h2 className="text-lg font-bold text-slate-900">Edit Submitted Application</h2>
+              <h2 className="text-lg font-bold text-slate-900">Edit Company Submission</h2>
               <Button variant="ghost" size="sm" onClick={() => setEditingApp(null)}>
                 ✕
               </Button>
@@ -655,6 +1677,17 @@ export default function RegistrarDashboardPage() {
                 />
               </div>
 
+              <div className="space-y-1.5">
+                <Label htmlFor="editCompEmail">Company Gmail *</Label>
+                <Input
+                  id="editCompEmail"
+                  type="email"
+                  value={editCompanyEmail}
+                  onChange={(e) => setEditCompanyEmail(e.target.value)}
+                  required
+                />
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="editRepName">Representative Name *</Label>
@@ -666,7 +1699,7 @@ export default function RegistrarDashboardPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="editRepRole">Designation / Role *</Label>
+                  <Label htmlFor="editRepRole">Designation *</Label>
                   <Input
                     id="editRepRole"
                     value={editRepRole}
@@ -674,17 +1707,6 @@ export default function RegistrarDashboardPage() {
                     required
                   />
                 </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="editRepEmail">Official Email *</Label>
-                <Input
-                  id="editRepEmail"
-                  type="email"
-                  value={editRepEmail}
-                  onChange={(e) => setEditRepEmail(e.target.value)}
-                  required
-                />
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
