@@ -42,6 +42,9 @@ export default function RegistrarDashboardPage() {
   const [appsLoading, setAppsLoading] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // Lock Warning Popup Modal State
+  const [lockPopup, setLockPopup] = useState<{ title: string; message: string } | null>(null);
+
   // Preview & Edit Modal States
   const [previewApp, setPreviewApp] = useState<CompanyApplication | null>(null);
   const [editingApp, setEditingApp] = useState<CompanyApplication | null>(null);
@@ -132,15 +135,39 @@ export default function RegistrarDashboardPage() {
     setApplications([]);
   };
 
-  // Open Edit Modal (Only allowed when status === "Pending")
-  const openEditModal = (app: CompanyApplication) => {
-    if (app.status !== "Pending") {
-      setFeedback({
-        type: "error",
-        text: "Editing is locked because this application is already under review or processed by an admin.",
+  // Open Edit Modal (Checks live DB status first and pops up alert if Admin is reviewing)
+  const openEditModal = async (app: CompanyApplication) => {
+    // Check live status from Supabase in case admin just clicked Preview/Download
+    const { data: latest } = await supabase
+      .from("company_applications")
+      .select("status")
+      .eq("id", app.id)
+      .single();
+
+    const currentStatus = latest?.status || app.status;
+
+    if (currentStatus !== app.status && user) {
+      await loadRegistrarApplications(user);
+    }
+
+    if (currentStatus === "Under Review" || currentStatus === "Verified") {
+      setLockPopup({
+        title: "Action Locked — Under Admin Review",
+        message:
+          "This registration form is currently being checked by our admin panel, so editing or deleting this application is not permitted.",
       });
       return;
     }
+
+    if (currentStatus === "Rejected") {
+      setLockPopup({
+        title: "Editing Disabled",
+        message:
+          "This registration application has been rejected by the admin panel and can no longer be edited. You may delete it and submit a new registration.",
+      });
+      return;
+    }
+
     setEditingApp(app);
     setEditRepName(app.rep_name);
     setEditRepEmail(app.rep_email);
@@ -157,7 +184,6 @@ export default function RegistrarDashboardPage() {
     setFeedback(null);
 
     try {
-      // Double-check live status from Supabase before updating
       const { data: latest, error: checkError } = await supabase
         .from("company_applications")
         .select("status")
@@ -169,9 +195,12 @@ export default function RegistrarDashboardPage() {
       if (latest.status !== "Pending") {
         setEditingApp(null);
         if (user) await loadRegistrarApplications(user);
-        throw new Error(
-          `Cannot save changes: Admin has already moved this application to "${latest.status}".`
-        );
+        setLockPopup({
+          title: "Action Locked — Under Admin Review",
+          message:
+            "This registration form is currently being checked by our admin panel, so editing or deleting this application is not permitted.",
+        });
+        return;
       }
 
       const { error } = await supabase
@@ -199,13 +228,26 @@ export default function RegistrarDashboardPage() {
     }
   };
 
-  // Delete Application (Allowed ONLY when status === "Pending" OR status === "Rejected")
+  // Delete Application (Checks live DB status and pops up alert if Admin is reviewing)
   const handleDeleteApplication = async (app: CompanyApplication) => {
-    const canDelete = app.status === "Pending" || app.status === "Rejected";
-    if (!canDelete) {
-      setFeedback({
-        type: "error",
-        text: `Cannot delete an application with status "${app.status}".`,
+    // Check live status from Supabase before allowing deletion
+    const { data: latest } = await supabase
+      .from("company_applications")
+      .select("status")
+      .eq("id", app.id)
+      .single();
+
+    const currentStatus = latest?.status || app.status;
+
+    if (currentStatus !== app.status && user) {
+      await loadRegistrarApplications(user);
+    }
+
+    if (currentStatus === "Under Review" || currentStatus === "Verified") {
+      setLockPopup({
+        title: "Action Locked — Under Admin Review",
+        message:
+          "This registration form is currently being checked by our admin panel, so editing or deleting this application is not permitted.",
       });
       return;
     }
@@ -219,22 +261,6 @@ export default function RegistrarDashboardPage() {
     setFeedback(null);
 
     try {
-      // Verify live status before deletion
-      const { data: latest, error: checkError } = await supabase
-        .from("company_applications")
-        .select("status")
-        .eq("id", app.id)
-        .single();
-
-      if (checkError) throw checkError;
-
-      if (latest.status !== "Pending" && latest.status !== "Rejected") {
-        if (user) await loadRegistrarApplications(user);
-        throw new Error(
-          `Deletion blocked: Application status is now "${latest.status}".`
-        );
-      }
-
       const { error } = await supabase
         .from("company_applications")
         .delete()
@@ -425,7 +451,7 @@ export default function RegistrarDashboardPage() {
                 <table className="w-full text-sm text-left border-collapse">
                   <thead>
                     <tr className="border-b bg-slate-100/80 text-slate-600 text-xs uppercase">
-                      <th className="py-3 px-4 font-semibold">Company & BR</th>
+                      <th className="py-3 px-4 font-semibold">Company &amp; BR</th>
                       <th className="py-3 px-4 font-semibold">Representative</th>
                       <th className="py-3 px-4 font-semibold">Submitted Date</th>
                       <th className="py-3 px-4 font-semibold">Status</th>
@@ -452,7 +478,7 @@ export default function RegistrarDashboardPage() {
                           </td>
                           <td className="py-3.5 px-4">{getStatusBadge(app.status)}</td>
                           <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
-                            {/* 2) Preview */}
+                            {/* Preview */}
                             <Button
                               size="sm"
                               variant="outline"
@@ -461,31 +487,22 @@ export default function RegistrarDashboardPage() {
                               Preview
                             </Button>
 
-                            {/* 3) Edit (Enabled ONLY if Pending) */}
+                            {/* Edit (Shows popup if locked) */}
                             <Button
                               size="sm"
                               variant="secondary"
-                              disabled={!canEdit}
-                              title={
-                                canEdit
-                                  ? "Edit application details"
-                                  : "Editing is disabled once admin reviews or processes the application"
-                              }
+                              className={!canEdit ? "opacity-50 cursor-not-allowed" : ""}
                               onClick={() => openEditModal(app)}
                             >
                               Edit
                             </Button>
 
-                            {/* 4) Delete (Enabled ONLY if Pending or Rejected) */}
+                            {/* Delete (Shows popup if locked) */}
                             <Button
                               size="sm"
                               variant="destructive"
-                              disabled={!canDelete || deletingId === app.id}
-                              title={
-                                canDelete
-                                  ? "Delete application"
-                                  : "Deletion is disabled while Under Review or Accepted"
-                              }
+                              disabled={deletingId === app.id}
+                              className={!canDelete ? "opacity-50 cursor-not-allowed" : ""}
                               onClick={() => handleDeleteApplication(app)}
                             >
                               {deletingId === app.id ? "Deleting..." : "Delete"}
@@ -501,6 +518,34 @@ export default function RegistrarDashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Admin Review Lock Popup Modal */}
+      {lockPopup && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-amber-200">
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold shrink-0">
+                !
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">{lockPopup.title}</h3>
+                <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+                  {lockPopup.message}
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end pt-2">
+              <Button
+                type="button"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                onClick={() => setLockPopup(null)}
+              >
+                Understood
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Preview Modal */}
       {previewApp && (

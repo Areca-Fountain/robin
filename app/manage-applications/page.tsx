@@ -28,7 +28,7 @@ interface CompanyApplication {
   wallet_address: string;
   signed_message: string;
   wallet_signature: string;
-  status: "Pending" | "Verified" | "Rejected" | string;
+  status: "Pending" | "Under Review" | "Verified" | "Rejected" | string;
   created_at: string;
 }
 
@@ -38,11 +38,16 @@ export default function ManageApplicationsPage() {
   const [applications, setApplications] = useState<CompanyApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"ALL" | "Pending" | "Verified" | "Rejected">("ALL");
+  const [statusFilter, setStatusFilter] = useState<
+    "ALL" | "Pending" | "Under Review" | "Verified" | "Rejected"
+  >("ALL");
   const [selectedApp, setSelectedApp] = useState<CompanyApplication | null>(null);
   const [activeDocTab, setActiveDocTab] = useState<DocTab>("br");
   const [updatingId, setUpdatingId] = useState<string | null>(null);
-  const [feedbackMsg, setFeedbackMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [feedbackMsg, setFeedbackMsg] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
   // Manual refresh handler
   const handleRefresh = useCallback(async () => {
@@ -63,7 +68,7 @@ export default function ManageApplicationsPage() {
     }
   }, []);
 
-  // Initial data fetch on mount (React 19 / ESLint compliant)
+  // Initial data fetch on mount
   useEffect(() => {
     let isMounted = true;
 
@@ -86,40 +91,51 @@ export default function ManageApplicationsPage() {
     };
   }, []);
 
-  // Approve or Reject Application
-  const handleStatusUpdate = async (id: string, newStatus: "Verified" | "Rejected") => {
-    setUpdatingId(id);
-    setFeedbackMsg(null);
+  // Automatically mark Pending application as "Under Review" when Admin inspects/downloads it
+  const markAsUnderReviewIfPending = async (app: CompanyApplication): Promise<CompanyApplication> => {
+    if (app.status !== "Pending") return app;
+
     try {
       const { error } = await supabase
         .from("company_applications")
-        .update({ status: newStatus })
-        .eq("id", id);
+        .update({ status: "Under Review" })
+        .eq("id", app.id)
+        .eq("status", "Pending");
 
-      if (error) throw error;
-
-      setApplications((prev) =>
-        prev.map((app) => (app.id === id ? { ...app, status: newStatus } : app))
-      );
-
-      if (selectedApp?.id === id) {
-        setSelectedApp({ ...selectedApp, status: newStatus });
+      if (!error) {
+        const updatedApp: CompanyApplication = { ...app, status: "Under Review" };
+        setApplications((prev) =>
+          prev.map((item) => (item.id === app.id ? updatedApp : item))
+        );
+        return updatedApp;
       }
-
-      setFeedbackMsg({
-        type: "success",
-        text: `Application status successfully updated to ${newStatus}.`,
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to update status";
-      setFeedbackMsg({ type: "error", text: msg });
-    } finally {
-      setUpdatingId(null);
+    } catch (err) {
+      console.error("Failed to transition status to Under Review:", err);
     }
+    return app;
   };
 
-  // Direct file download handler
-  const handleDownloadDocument = async (url: string, filename: string) => {
+  // Preview Handler (triggers Under Review lock)
+  const handlePreviewClick = async (app: CompanyApplication) => {
+    setActiveDocTab("br");
+    setSelectedApp(app);
+    const updatedApp = await markAsUnderReviewIfPending(app);
+    setSelectedApp(updatedApp);
+  };
+
+  // Direct file download handler (also triggers Under Review lock if app is passed)
+  const handleDownloadDocument = async (
+    url: string,
+    filename: string,
+    app?: CompanyApplication
+  ) => {
+    if (app) {
+      const updatedApp = await markAsUnderReviewIfPending(app);
+      if (selectedApp?.id === app.id) {
+        setSelectedApp(updatedApp);
+      }
+    }
+
     try {
       const response = await fetch(url);
       const blob = await response.blob();
@@ -136,6 +152,50 @@ export default function ManageApplicationsPage() {
     }
   };
 
+  // Approve or Reject Application
+  const handleStatusUpdate = async (
+    app: CompanyApplication,
+    newStatus: "Verified" | "Rejected"
+  ) => {
+    // Prevent re-approving an already Rejected application
+    if (app.status === "Rejected" && newStatus === "Verified") {
+      setFeedbackMsg({
+        type: "error",
+        text: "This application has already been rejected and cannot be approved.",
+      });
+      return;
+    }
+
+    setUpdatingId(app.id);
+    setFeedbackMsg(null);
+    try {
+      const { error } = await supabase
+        .from("company_applications")
+        .update({ status: newStatus })
+        .eq("id", app.id);
+
+      if (error) throw error;
+
+      setApplications((prev) =>
+        prev.map((item) => (item.id === app.id ? { ...item, status: newStatus } : item))
+      );
+
+      if (selectedApp?.id === app.id) {
+        setSelectedApp({ ...selectedApp, status: newStatus });
+      }
+
+      setFeedbackMsg({
+        type: "success",
+        text: `Application status successfully updated to ${newStatus}.`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to update status";
+      setFeedbackMsg({ type: "error", text: msg });
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
   // Filtered applications list
   const filteredApps = applications.filter((app) => {
     const matchesStatus = statusFilter === "ALL" || app.status === statusFilter;
@@ -149,7 +209,9 @@ export default function ManageApplicationsPage() {
   // Summary counts
   const counts = {
     total: applications.length,
-    pending: applications.filter((a) => a.status === "Pending").length,
+    pending: applications.filter(
+      (a) => a.status === "Pending" || a.status === "Under Review"
+    ).length,
     verified: applications.filter((a) => a.status === "Verified").length,
     rejected: applications.filter((a) => a.status === "Rejected").length,
   };
@@ -160,6 +222,12 @@ export default function ManageApplicationsPage() {
         return (
           <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-100">
             Verified
+          </Badge>
+        );
+      case "Under Review":
+        return (
+          <Badge className="bg-indigo-100 text-indigo-800 border-indigo-300 hover:bg-indigo-100">
+            Under Review
           </Badge>
         );
       case "Rejected":
@@ -233,7 +301,7 @@ export default function ManageApplicationsPage() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Pending Review</CardDescription>
+              <CardDescription>Pending / In Review</CardDescription>
               <CardTitle className="text-2xl text-amber-600">{counts.pending}</CardTitle>
             </CardHeader>
           </Card>
@@ -274,17 +342,19 @@ export default function ManageApplicationsPage() {
               className="sm:max-w-md"
             />
             <div className="flex flex-wrap gap-2">
-              {(["ALL", "Pending", "Verified", "Rejected"] as const).map((status) => (
-                <Button
-                  key={status}
-                  type="button"
-                  size="sm"
-                  variant={statusFilter === status ? "default" : "outline"}
-                  onClick={() => setStatusFilter(status)}
-                >
-                  {status === "ALL" ? "All" : status}
-                </Button>
-              ))}
+              {(["ALL", "Pending", "Under Review", "Verified", "Rejected"] as const).map(
+                (status) => (
+                  <Button
+                    key={status}
+                    type="button"
+                    size="sm"
+                    variant={statusFilter === status ? "default" : "outline"}
+                    onClick={() => setStatusFilter(status)}
+                  >
+                    {status === "ALL" ? "All" : status}
+                  </Button>
+                )
+              )}
             </div>
           </CardContent>
         </Card>
@@ -294,7 +364,7 @@ export default function ManageApplicationsPage() {
           <CardHeader>
             <CardTitle className="text-lg">Company Applications ({filteredApps.length})</CardTitle>
             <CardDescription>
-              Click Preview to inspect uploaded documents and wallet signature details.
+              Previewing or downloading documents automatically locks registrar editing while under admin review.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -311,7 +381,7 @@ export default function ManageApplicationsPage() {
                 <table className="w-full text-sm text-left border-collapse">
                   <thead>
                     <tr className="border-b bg-slate-100/80 text-slate-600 text-xs uppercase">
-                      <th className="py-3 px-4 font-semibold">Company & BR</th>
+                      <th className="py-3 px-4 font-semibold">Company &amp; BR</th>
                       <th className="py-3 px-4 font-semibold">Representative</th>
                       <th className="py-3 px-4 font-semibold">Cardano Wallet</th>
                       <th className="py-3 px-4 font-semibold">Status</th>
@@ -319,66 +389,77 @@ export default function ManageApplicationsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {filteredApps.map((app) => (
-                      <tr key={app.id} className="hover:bg-slate-50/90 transition-colors">
-                        <td className="py-3.5 px-4">
-                          <div className="font-semibold text-slate-900">{app.company_name}</div>
-                          <div className="text-xs font-mono text-slate-500">{app.br_number}</div>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <div className="font-medium text-slate-800">{app.rep_name}</div>
-                          <div className="text-xs text-slate-500">
-                            {app.rep_role} • {app.rep_email}
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <code className="text-xs bg-slate-100 px-2 py-1 rounded text-slate-700">
-                            {app.wallet_address.slice(0, 14)}...{app.wallet_address.slice(-8)}
-                          </code>
-                        </td>
-                        <td className="py-3.5 px-4">{getStatusBadge(app.status)}</td>
-                        <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setSelectedApp(app);
-                              setActiveDocTab("br");
-                            }}
-                          >
-                            Preview
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() =>
-                              handleDownloadDocument(
-                                app.br_document_url,
-                                `${app.company_name.replace(/\s+/g, "_")}_BR`
-                              )
-                            }
-                          >
-                            Download BR
-                          </Button>
-                          <Button
-                            size="sm"
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                            disabled={updatingId === app.id || app.status === "Verified"}
-                            onClick={() => handleStatusUpdate(app.id, "Verified")}
-                          >
-                            Approve
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            disabled={updatingId === app.id || app.status === "Rejected"}
-                            onClick={() => handleStatusUpdate(app.id, "Rejected")}
-                          >
-                            Reject
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
+                    {filteredApps.map((app) => {
+                      const isRejected = app.status === "Rejected";
+                      const isVerified = app.status === "Verified";
+
+                      return (
+                        <tr key={app.id} className="hover:bg-slate-50/90 transition-colors">
+                          <td className="py-3.5 px-4">
+                            <div className="font-semibold text-slate-900">{app.company_name}</div>
+                            <div className="text-xs font-mono text-slate-500">{app.br_number}</div>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <div className="font-medium text-slate-800">{app.rep_name}</div>
+                            <div className="text-xs text-slate-500">
+                              {app.rep_role} • {app.rep_email}
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <code className="text-xs bg-slate-100 px-2 py-1 rounded text-slate-700">
+                              {app.wallet_address.slice(0, 14)}...{app.wallet_address.slice(-8)}
+                            </code>
+                          </td>
+                          <td className="py-3.5 px-4">{getStatusBadge(app.status)}</td>
+                          <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handlePreviewClick(app)}
+                            >
+                              Preview
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                handleDownloadDocument(
+                                  app.br_document_url,
+                                  `${app.company_name.replace(/\s+/g, "_")}_BR`,
+                                  app
+                                )
+                              }
+                            >
+                              Download BR
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-40"
+                              disabled={updatingId === app.id || isVerified || isRejected}
+                              title={
+                                isRejected
+                                  ? "Rejected applications cannot be approved"
+                                  : isVerified
+                                  ? "Already verified"
+                                  : "Approve application"
+                              }
+                              onClick={() => handleStatusUpdate(app, "Verified")}
+                            >
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="disabled:opacity-40"
+                              disabled={updatingId === app.id || isRejected}
+                              onClick={() => handleStatusUpdate(app, "Rejected")}
+                            >
+                              Reject
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -477,7 +558,9 @@ export default function ManageApplicationsPage() {
                         <Button
                           size="sm"
                           variant="secondary"
-                          onClick={() => handleDownloadDocument(docInfo.url, docInfo.fileName)}
+                          onClick={() =>
+                            handleDownloadDocument(docInfo.url, docInfo.fileName, selectedApp)
+                          }
                         >
                           ↓ Download {docInfo.title}
                         </Button>
@@ -524,20 +607,26 @@ export default function ManageApplicationsPage() {
             {/* Modal Footer: Approve / Reject Actions */}
             <div className="px-6 py-4 border-t bg-slate-50 flex items-center justify-between">
               <span className="text-xs text-slate-500">
-                Approving marks this entity as Verified in the Robin registry.
+                {selectedApp.status === "Rejected"
+                  ? "This application was permanently rejected and cannot be approved."
+                  : "Approving marks this entity as Verified in the Robin registry."}
               </span>
               <div className="flex gap-3">
                 <Button
                   variant="destructive"
                   disabled={updatingId === selectedApp.id || selectedApp.status === "Rejected"}
-                  onClick={() => handleStatusUpdate(selectedApp.id, "Rejected")}
+                  onClick={() => handleStatusUpdate(selectedApp, "Rejected")}
                 >
                   {updatingId === selectedApp.id ? "Updating..." : "Reject Application"}
                 </Button>
                 <Button
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                  disabled={updatingId === selectedApp.id || selectedApp.status === "Verified"}
-                  onClick={() => handleStatusUpdate(selectedApp.id, "Verified")}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-40"
+                  disabled={
+                    updatingId === selectedApp.id ||
+                    selectedApp.status === "Verified" ||
+                    selectedApp.status === "Rejected"
+                  }
+                  onClick={() => handleStatusUpdate(selectedApp, "Verified")}
                 >
                   {updatingId === selectedApp.id ? "Updating..." : "Approve & Verify"}
                 </Button>
