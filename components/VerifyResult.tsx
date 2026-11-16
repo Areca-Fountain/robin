@@ -10,6 +10,8 @@ export interface VerifyResponse {
     employeeName: string;
     position: string | null;
     issuedAt: string;
+    /** true when Robin's team has verified the issuing company */
+    companyVerified?: boolean;
   };
   txHash?: string;
 }
@@ -82,6 +84,23 @@ export default function VerifyResult({ result }: { result: VerifyResponse }) {
         <dl className="mt-5 grid grid-cols-[auto,1fr] gap-x-6 gap-y-2 text-sm">
           <dt className="text-zinc-500">Company</dt>
           <dd className="font-medium">{result.letter.companyName}</dd>
+
+          {result.letter.companyVerified !== undefined && (
+            <>
+              <dt className="text-zinc-500">Company status</dt>
+              <dd>
+                <span
+                  className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${
+                    result.letter.companyVerified
+                      ? "bg-emerald-600 text-white"
+                      : "bg-zinc-500 text-white"
+                  }`}
+                >
+                  {result.letter.companyVerified ? "Verified" : "Not verified"}
+                </span>
+              </dd>
+            </>
+          )}
 
           <dt className="text-zinc-500">Employee</dt>
           <dd className="font-medium">{result.letter.employeeName}</dd>
