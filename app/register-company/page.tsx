@@ -20,7 +20,6 @@ interface CardanoWalletApi {
   getUsedAddresses: () => Promise<string[]>;
   getUnusedAddresses: () => Promise<string[]>;
   getChangeAddress: () => Promise<string>;
-  signData: (address: string, payload: string) => Promise<{ signature: string; key: string }>;
 }
 
 interface LaceProvider {
@@ -30,42 +29,32 @@ interface LaceProvider {
 
 interface SubmittedApplication {
   id: string;
-  user_id?: string | null;
   rep_name: string;
   rep_email: string;
   rep_role: string;
   company_name: string;
+  company_email?: string;
   br_number: string;
   wallet_address: string;
   status: string;
 }
 
-function stringToHex(str: string): string {
-  return Array.from(new TextEncoder().encode(str))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 export default function RegisterCompanyPage() {
-  // 1. Representative Details
-  const [repName, setRepName] = useState("");
-  const [repEmail, setRepEmail] = useState("");
-  const [repRole, setRepRole] = useState("");
-  const [repLetterFile, setRepLetterFile] = useState<File | null>(null);
-
-  // 2. Company & KYC Details
+  // 1. Company & Representative Basic Details
   const [companyName, setCompanyName] = useState("");
   const [brNumber, setBrNumber] = useState("");
-  const [brFile, setBrFile] = useState<File | null>(null);
-  const [kycFile, setKycFile] = useState<File | null>(null);
+  const [companyEmail, setCompanyEmail] = useState("");
+  const [repName, setRepName] = useState("");
+  const [repRole, setRepRole] = useState("");
 
-  // 3. Wallet & Signature States
-  const [walletApi, setWalletApi] = useState<CardanoWalletApi | null>(null);
+  // 2. Documents (BR / ROC & Authorization/KYC)
+  const [brFile, setBrFile] = useState<File | null>(null);
+  const [repLetterFile, setRepLetterFile] = useState<File | null>(null);
+
+  // 3. Lace Wallet Connect State (No Sign-in / No Message Signing Required)
   const [connected, setConnected] = useState(false);
+  const [connectingWallet, setConnectingWallet] = useState(false);
   const [walletAddress, setWalletAddress] = useState("");
-  const [signedMessage, setSignedMessage] = useState("");
-  const [walletSignature, setWalletSignature] = useState("");
-  const [isSigned, setIsSigned] = useState(false);
 
   // 4. Submission & Status States
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -73,9 +62,10 @@ export default function RegisterCompanyPage() {
   const [submittedData, setSubmittedData] = useState<SubmittedApplication | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
 
-  // Connect Lace Wallet via CIP-30
+  // Connect Lace Wallet via CIP-30 (Connection Only — No Sign-in Needed)
   const handleConnectWallet = async () => {
     setErrorMsg("");
+    setConnectingWallet(true);
     try {
       const cardanoObj =
         typeof window !== "undefined"
@@ -83,7 +73,9 @@ export default function RegisterCompanyPage() {
           : undefined;
 
       if (!cardanoObj?.lace) {
-        setErrorMsg("Lace Wallet extension not detected. Please install and unlock Lace in Chrome, then refresh.");
+        setErrorMsg(
+          "Lace Wallet extension not detected. Please install and unlock Lace in your browser, then refresh."
+        );
         return;
       }
 
@@ -98,111 +90,77 @@ export default function RegisterCompanyPage() {
         return;
       }
 
-      setWalletApi(api);
       setWalletAddress(address);
       setConnected(true);
     } catch (err: unknown) {
-      setErrorMsg("Failed to connect Lace Wallet. User rejected the connection or wallet is locked.");
+      setErrorMsg("Failed to connect Lace Wallet. Connection was rejected or wallet is locked.");
       console.error(err);
+    } finally {
+      setConnectingWallet(false);
     }
   };
 
-  // Sign Message by Wallet (CIP-30 Data Signing)
-  const handleSignMessage = async () => {
-    setErrorMsg("");
-    if (!walletApi || !walletAddress) {
-      setErrorMsg("Please connect your Lace Wallet first.");
-      return;
-    }
-    try {
-      const messageToSign = `Robin Verification: I (${repName || "Representative"}) authorize registration for ${companyName || "Company"} at ${new Date().toISOString()}`;
-      const hexMessage = stringToHex(messageToSign);
-
-      const signature = await walletApi.signData(walletAddress, hexMessage);
-
-      setSignedMessage(messageToSign);
-      setWalletSignature(JSON.stringify(signature));
-      setIsSigned(true);
-    } catch (err: unknown) {
-      setErrorMsg("Wallet signature was cancelled or failed. Please try again.");
-      console.error(err);
-    }
-  };
-
-  // Upload file to Supabase Storage
+  // Upload file to Supabase Storage ("company-documents" bucket)
   const uploadFileToSupabase = async (file: File, folder: string) => {
-    const fileExt = file.name.split(".").pop();
+    const fileExt = file.name.split(".").pop() || "pdf";
     const fileName = `${folder}/${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
 
     const { error } = await supabase.storage
-      .from("company-docs")
-      .upload(fileName, file);
+      .from("company-documents")
+      .upload(fileName, file, { upsert: true });
 
     if (error) throw error;
 
     const { data: publicUrlData } = supabase.storage
-      .from("company-docs")
+      .from("company-documents")
       .getPublicUrl(fileName);
 
     return publicUrlData.publicUrl;
   };
 
-  // Submit Application (linked to authenticated Registrar user_id)
+  // Submit Application (Works without signing in — only Lace wallet connection is needed)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
 
-    if (!repLetterFile || !brFile || !kycFile) {
-      setErrorMsg("Please upload all required documents (Authorization Letter, BR Certificate, and KYC Form).");
+    if (!brFile) {
+      setErrorMsg("Please upload your Company BR / ROC certificate.");
       return;
     }
 
-    if (!connected || !isSigned) {
-      setErrorMsg("Please connect your Lace Wallet and sign the verification message before submitting.");
+    if (!connected || !walletAddress) {
+      setErrorMsg("Please connect your Cardano Lace Wallet before submitting.");
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      // Get currently signed-in Registrar user (if logged in via Google OAuth)
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      // If the signed-in user is a registrar, record them as the submitting registrar so the
-      // admin dashboard shows "Via Registrar" and the registrar dashboard counts this submission.
-      let registrarUserId: string | null = null;
-      if (user) {
-        const { data: registrarRow } = await supabase
-          .from("registrar_profiles")
-          .select("user_id")
-          .eq("user_id", user.id)
-          .maybeSingle();
-        if (registrarRow) registrarUserId = user.id;
-      }
-
-      const repLetterUrl = await uploadFileToSupabase(repLetterFile, "letters");
       const brDocUrl = await uploadFileToSupabase(brFile, "br-docs");
-      const kycDocUrl = await uploadFileToSupabase(kycFile, "kyc-docs");
+      const repLetterUrl = repLetterFile
+        ? await uploadFileToSupabase(repLetterFile, "letters")
+        : brDocUrl;
+
+      const cleanEmail = companyEmail.trim().toLowerCase();
 
       const { data, error } = await supabase
         .from("company_applications")
         .insert([
           {
-            user_id: user?.id || null,
-            registrar_user_id: registrarUserId,
-            rep_name: repName,
-            rep_email: repEmail,
-            rep_role: repRole,
+            user_id: null,
+            registrar_user_id: null,
+            rep_name: repName.trim(),
+            rep_email: cleanEmail,
+            rep_role: repRole.trim() || "Authorized Representative",
             rep_letter_url: repLetterUrl,
-            company_name: companyName,
-            br_number: brNumber,
+            company_name: companyName.trim(),
+            company_email: cleanEmail,
+            br_number: brNumber.trim(),
             br_document_url: brDocUrl,
-            kyc_document_url: kycDocUrl,
+            kyc_document_url: brDocUrl,
             wallet_address: walletAddress,
-            signed_message: signedMessage,
-            wallet_signature: walletSignature,
+            signed_message: `Wallet connected registration for ${companyName.trim()}`,
+            wallet_signature: "lace_wallet_connected",
             status: "Pending",
           },
         ])
@@ -229,15 +187,18 @@ export default function RegisterCompanyPage() {
         <Card className="w-full max-w-lg shadow-lg border-slate-200">
           <CardHeader className="text-center space-y-2">
             <div className="flex justify-center">
-              <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-300 px-4 py-1 text-sm font-semibold">
+              <Badge
+                variant="outline"
+                className="bg-amber-100 text-amber-800 border-amber-300 px-4 py-1 text-sm font-semibold"
+              >
                 Status: {submittedData.status}
               </Badge>
             </div>
             <CardTitle className="text-2xl font-bold text-slate-900">
-              Application Submitted!
+              Company Account Created!
             </CardTitle>
             <CardDescription>
-              Your company registration application has been submitted and is awaiting verification.
+              Your company registration is currently <strong>Pending</strong> verification by Robin&apos;s Admin team.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
@@ -247,22 +208,32 @@ export default function RegisterCompanyPage() {
                 <span className="font-medium text-slate-900">{submittedData.company_name}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">BR Number:</span>
+                <span className="text-slate-500">BR / ROC Number:</span>
                 <span className="font-medium text-slate-900">{submittedData.br_number}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">Representative:</span>
-                <span className="font-medium text-slate-900">{submittedData.rep_name} ({submittedData.rep_role})</span>
+                <span className="text-slate-500">Company Login Gmail:</span>
+                <span className="font-medium text-slate-900">
+                  {submittedData.company_email || submittedData.rep_email}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Contact Person:</span>
+                <span className="font-medium text-slate-900">
+                  {submittedData.rep_name} ({submittedData.rep_role})
+                </span>
               </div>
               <Separator className="my-2" />
               <div>
-                <span className="text-slate-500 block mb-1">Verified Identity (Cardano Wallet Hex Address):</span>
+                <span className="text-slate-500 block mb-1">
+                  Connected Cardano Lace Wallet Address:
+                </span>
                 <code className="text-xs bg-white p-2 rounded border block break-all text-slate-700">
                   {submittedData.wallet_address}
                 </code>
               </div>
               <div className="flex items-center gap-2 text-emerald-700 font-medium pt-1">
-                <span>✓ Signed by Lace Wallet</span>
+                <span>✓ Lace Wallet Connected</span>
               </div>
             </div>
 
@@ -277,9 +248,9 @@ export default function RegisterCompanyPage() {
               >
                 Register Another Company
               </Button>
-              <Link href="/registrar" className="flex-1">
+              <Link href="/" className="flex-1">
                 <Button className="w-full bg-indigo-600 hover:bg-indigo-700">
-                  Go to Registrar Dashboard
+                  Back to Home
                 </Button>
               </Link>
             </div>
@@ -295,16 +266,16 @@ export default function RegisterCompanyPage() {
         <div className="flex items-center justify-between">
           <div>
             <Link
-              href="/registrar"
+              href="/"
               className="text-xs font-semibold uppercase tracking-wider text-indigo-600 hover:text-indigo-500"
             >
-              ← Back to Registrar Dashboard
+              ← Back to Robin Home
             </Link>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900 mt-1">
-              Register Company
+              Register as a Company
             </h1>
             <p className="text-slate-500 mt-1">
-              Submit representative verification, BR &amp; KYC documents, and sign with your Cardano Lace wallet.
+              Enter your basic business details, upload your BR/ROC document, and connect your Cardano Lace wallet. No sign-in required.
             </p>
           </div>
           <Badge variant="secondary" className="text-xs px-3 py-1">
@@ -319,69 +290,12 @@ export default function RegisterCompanyPage() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Section 1: Representative Details */}
+          {/* Step 1: Basic Business Details */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">1. Representative Verification</CardTitle>
+              <CardTitle className="text-lg">1. Basic Business Details</CardTitle>
               <CardDescription>
-                Provide details of the authorized representative and upload the company authorization letter.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="repName">Full Name *</Label>
-                  <Input
-                    id="repName"
-                    placeholder="e.g. Kasun Perera"
-                    value={repName}
-                    onChange={(e) => setRepName(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="repRole">Designation / Role *</Label>
-                  <Input
-                    id="repRole"
-                    placeholder="e.g. HR Manager / Director"
-                    value={repRole}
-                    onChange={(e) => setRepRole(e.target.value)}
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="repEmail">Official Email *</Label>
-                <Input
-                  id="repEmail"
-                  type="email"
-                  placeholder="kasun@company.lk"
-                  value={repEmail}
-                  onChange={(e) => setRepEmail(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="repLetter">Company Authorization Letter (PDF/Image) *</Label>
-                <Input
-                  id="repLetter"
-                  type="file"
-                  accept=".pdf,.png,.jpg,.jpeg"
-                  onChange={(e) => setRepLetterFile(e.target.files?.[0] || null)}
-                  required
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Section 2: Company & KYC Forms */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">2. Company &amp; KYC Documents</CardTitle>
-              <CardDescription>
-                Upload Business Registration (BR) and Know Your Customer (KYC) documentation for entity verification.
+                Enter your company name, BR/ROC number, and official Gmail address (used later to access your Company Dashboard).
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -397,7 +311,7 @@ export default function RegisterCompanyPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="brNumber">BR Number *</Label>
+                  <Label htmlFor="brNumber">BR / ROC Number *</Label>
                   <Input
                     id="brNumber"
                     placeholder="e.g. PV 00234567"
@@ -408,9 +322,55 @@ export default function RegisterCompanyPage() {
                 </div>
               </div>
 
+              <div className="space-y-2">
+                <Label htmlFor="companyEmail">Company Official Email (Gmail Preferred) *</Label>
+                <Input
+                  id="companyEmail"
+                  type="email"
+                  placeholder="company.official@gmail.com"
+                  value={companyEmail}
+                  onChange={(e) => setCompanyEmail(e.target.value)}
+                  required
+                />
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="brFile">Upload BR Certificate *</Label>
+                  <Label htmlFor="repName">Primary Contact / Director Name *</Label>
+                  <Input
+                    id="repName"
+                    placeholder="e.g. Kasun Perera"
+                    value={repName}
+                    onChange={(e) => setRepName(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="repRole">Designation / Role *</Label>
+                  <Input
+                    id="repRole"
+                    placeholder="e.g. Director / HR Manager"
+                    value={repRole}
+                    onChange={(e) => setRepRole(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Step 2: Submit BR / ROC */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">2. Submit BR / ROC Document</CardTitle>
+              <CardDescription>
+                Upload your Business Registration (BR / ROC) certificate. Verification status will remain Pending until verified by Robin&apos;s team.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="brFile">BR / ROC Certificate (PDF/Image) *</Label>
                   <Input
                     id="brFile"
                     type="file"
@@ -420,42 +380,43 @@ export default function RegisterCompanyPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="kycFile">Upload KYC Form *</Label>
+                  <Label htmlFor="repLetter">Supporting Document / Letter (Optional)</Label>
                   <Input
-                    id="kycFile"
+                    id="repLetter"
                     type="file"
                     accept=".pdf,.png,.jpg,.jpeg"
-                    onChange={(e) => setKycFile(e.target.files?.[0] || null)}
-                    required
+                    onChange={(e) => setRepLetterFile(e.target.files?.[0] || null)}
                   />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Section 3: Lace Wallet Identity & Signing */}
+          {/* Step 3: Connect Lace Wallet (No Sign-in Required) */}
           <Card className="border-slate-300">
             <CardHeader>
-              <CardTitle className="text-lg">3. Web3 Identity Verification (Lace Wallet)</CardTitle>
+              <CardTitle className="text-lg">3. Connect Cardano Lace Wallet</CardTitle>
               <CardDescription>
-                Connect your Cardano Lace wallet to establish your on-chain identity and cryptographically sign this application.
+                Connect your Lace wallet to link your company&apos;s on-chain Cardano address. No message signing or login is required.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {!connected ? (
                 <Button
                   type="button"
+                  disabled={connectingWallet}
                   onClick={handleConnectWallet}
                   className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700"
                 >
-                  Connect Lace Wallet
+                  {connectingWallet ? "Connecting Lace..." : "Connect Lace Wallet"}
                 </Button>
               ) : (
-                <div className="space-y-4 bg-slate-100 p-4 rounded-lg border">
+                <div className="space-y-3 bg-emerald-50/70 p-4 rounded-lg border border-emerald-200">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                      Connected Wallet Address (Identity)
-                    </span>
+                    <div className="flex items-center gap-2 text-emerald-700 font-semibold text-sm">
+                      <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 inline-block"></span>
+                      <span>Lace Wallet Connected</span>
+                    </div>
                     <Button
                       type="button"
                       variant="ghost"
@@ -463,34 +424,19 @@ export default function RegisterCompanyPage() {
                       className="text-xs text-red-600 h-6"
                       onClick={() => {
                         setConnected(false);
-                        setWalletApi(null);
                         setWalletAddress("");
-                        setIsSigned(false);
                       }}
                     >
                       Disconnect
                     </Button>
                   </div>
-                  <p className="text-xs font-mono bg-white p-2.5 rounded border break-all text-slate-800">
-                    {walletAddress}
-                  </p>
-
-                  <div className="pt-2 flex items-center justify-between">
-                    {!isSigned ? (
-                      <Button
-                        type="button"
-                        onClick={handleSignMessage}
-                        variant="secondary"
-                        className="border border-slate-300"
-                      >
-                        Sign Verification Message
-                      </Button>
-                    ) : (
-                      <div className="flex items-center gap-2 text-emerald-700 font-semibold text-sm">
-                        <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 inline-block"></span>
-                        <span>Signed by Wallet (Verified)</span>
-                      </div>
-                    )}
+                  <div>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 block mb-1">
+                      Connected Wallet Address (Saved to Database)
+                    </span>
+                    <p className="text-xs font-mono bg-white p-2.5 rounded border break-all text-slate-800">
+                      {walletAddress}
+                    </p>
                   </div>
                 </div>
               )}
@@ -502,10 +448,10 @@ export default function RegisterCompanyPage() {
             <Button
               type="submit"
               size="lg"
-              disabled={!connected || !isSigned || isSubmitting}
-              className="w-full sm:w-auto px-8"
+              disabled={!connected || isSubmitting}
+              className="w-full sm:w-auto px-8 bg-indigo-600 hover:bg-indigo-700"
             >
-              {isSubmitting ? "Submitting Application..." : "Submit Application"}
+              {isSubmitting ? "Creating Company Account..." : "Submit Company Registration"}
             </Button>
           </div>
         </form>
