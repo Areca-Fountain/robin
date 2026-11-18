@@ -1,7 +1,8 @@
 // SERVER-SIDE ONLY: uses your Blockfrost key. Only import this from API routes
 // or server components, never from a "use client" file.
 
-const BLOCKFROST_URL = "https://cardano-preprod.blockfrost.io/api/v0";
+const BLOCKFROST_URL =
+  process.env.BLOCKFROST_URL ?? "https://cardano-preprod.blockfrost.io/api/v0";
 
 /**
  * The transaction metadata label Head Lock uses.
