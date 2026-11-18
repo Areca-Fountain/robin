@@ -1,103 +1,284 @@
 "use client";
 
-import Link from "next/link";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useCompany } from "@/components/dashboard/CompanyProvider";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  MAX_BODY_LENGTH,
+  PLACEHOLDERS,
+  STARTER_BODY,
+  validateFormat,
+} from "@/lib/letter-format";
 
-function formatDate(iso: string) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+interface Format {
+  id: string;
+  name: string;
+  body: string;
+  signerName: string;
+  signerTitle: string;
+  status: "Draft" | "Generated";
+  updatedAt: string;
 }
 
-export default function AnalyticsPage() {
-  const { me } = useCompany();
-  if (!me) return null;
+const textareaClass =
+  "w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm font-mono outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
-  const cards = [
-    { label: "Letters issued", value: me.stats.letters },
-    { label: "Issued this month", value: me.stats.lettersThisMonth },
-    { label: "Ready formats", value: me.stats.generatedFormats },
-    { label: "Team members", value: me.stats.teamMembers },
-  ];
+export default function FormatsPage() {
+  const { me, authFetch, refresh } = useCompany();
+  const [formats, setFormats] = useState<Format[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Editor
+  const [editing, setEditing] = useState(false);
+  const [id, setId] = useState("");
+  const [name, setName] = useState("");
+  const [body, setBody] = useState("");
+  const [signerName, setSignerName] = useState("");
+  const [signerTitle, setSignerTitle] = useState("");
+
+  const reloadFormats = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/formats", { action: "list" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not load formats.");
+      setFormats(data.formats as Format[]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load formats.");
+    } finally {
+      setLoading(false);
+    }
+  }, [authFetch]);
+
+  useEffect(() => {
+    let active = true;
+    async function initialLoad() {
+      try {
+        const res = await authFetch("/api/formats", { action: "list" });
+        const data = await res.json();
+        if (!active) return;
+        if (!res.ok) throw new Error(data.error ?? "Could not load formats.");
+        setFormats(data.formats as Format[]);
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : "Could not load formats.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void initialLoad();
+    return () => {
+      active = false;
+    };
+  }, [authFetch]);
+
+  function openEditor(f?: Format) {
+    setError("");
+    setMessage("");
+    setId(f?.id ?? "");
+    setName(f?.name ?? "");
+    setBody(f?.body ?? STARTER_BODY);
+    setSignerName(f?.signerName ?? me?.company.name ?? "");
+    setSignerTitle(f?.signerTitle ?? "");
+    setEditing(true);
+  }
+
+  async function call(action: string, extra: Record<string, unknown> = {}) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const res = await authFetch("/api/formats", { action, ...extra });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Something went wrong.");
+      return data;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    const problem = validateFormat({ name, body, signerName, signerTitle });
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    const data = await call("save", { id, name, body, signerName, signerTitle });
+    if (data) {
+      setEditing(false);
+      setMessage("Format saved as a draft. Press Generate to make it ready for issuing.");
+      await reloadFormats();
+      await refresh();
+    }
+  }
+
+  async function handleGenerate(f: Format) {
+    const data = await call("generate", { id: f.id });
+    if (data) {
+      setMessage(`"${f.name}" is ready. It now appears in Issue Service Letter.`);
+      await reloadFormats();
+      await refresh();
+    }
+  }
+
+  async function handleDelete(f: Format) {
+    if (!window.confirm(`Delete the format "${f.name}"? Letters already issued are not affected.`)) return;
+    const data = await call("delete", { id: f.id });
+    if (data) {
+      await reloadFormats();
+      await refresh();
+    }
+  }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Analytics</h1>
-        <p className="mt-1 text-slate-600">An overview of {me.company.name}.</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Manage Formats</h1>
+          <p className="mt-1 text-slate-600">
+            Create the wording of your service letters once. Press Generate to make a format
+            available in Issue Service Letter.
+          </p>
+        </div>
+        {!editing && (
+          <Button className="bg-indigo-600 hover:bg-indigo-700" onClick={() => openEditor()}>
+            New format
+          </Button>
+        )}
       </div>
 
-      {!me.company.verified && (
-        <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Your company is <strong>{me.company.status.toLowerCase()}</strong>. You can already
-          issue letters, but anyone who scans them will see &quot;Not verified&quot; until
-          Robin&apos;s team approves the company.{" "}
-          <Link href="/dashboard/verification" className="underline">
-            See status
-          </Link>
+      {message && (
+        <p className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900" role="status">
+          {message}
+        </p>
+      )}
+      {error && (
+        <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
+          {error}
         </p>
       )}
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        {cards.map((c) => (
-          <Card key={c.label} className="border-slate-200 shadow-sm">
-            <CardContent className="pt-4">
-              <p className="text-3xl font-bold text-slate-900">{c.value}</p>
-              <p className="mt-1 text-xs text-slate-500">{c.label}</p>
+      {editing && (
+        <form onSubmit={handleSave}>
+          <Card className="border-slate-200 shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-lg">{id ? "Edit format" : "New format"}</CardTitle>
+              <CardDescription>
+                Type the letter text and use placeholders. Robin fills them in for each employee.
+                Use English letters only.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="name">Format name *</Label>
+                <Input id="name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="e.g. Standard service letter" required />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="body">Letter text *</Label>
+                <textarea
+                  id="body"
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  rows={9}
+                  className={textareaClass}
+                />
+                <p className="text-xs text-slate-500">
+                  {body.length} / {MAX_BODY_LENGTH} characters. A new line starts a new paragraph.
+                </p>
+              </div>
+
+              <div className="rounded-lg bg-slate-100 p-3 text-xs text-slate-700">
+                <p className="mb-1 font-semibold">Placeholders you can use</p>
+                <ul className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
+                  {PLACEHOLDERS.map((p) => (
+                    <li key={p.key}>
+                      <code className="rounded bg-white px-1">{`{{${p.key}}}`}</code> {p.label}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="signerName">Signed by (name) *</Label>
+                  <Input id="signerName" value={signerName} onChange={(e) => setSignerName(e.target.value)} maxLength={80} required />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="signerTitle">Title *</Label>
+                  <Input id="signerTitle" value={signerTitle} onChange={(e) => setSignerTitle(e.target.value)} maxLength={80} placeholder="e.g. Head of HR" required />
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <Button type="submit" disabled={busy} className="bg-indigo-600 hover:bg-indigo-700">
+                  {busy ? "Saving…" : "Save format"}
+                </Button>
+                <Button type="button" variant="outline" onClick={() => setEditing(false)} disabled={busy}>
+                  Cancel
+                </Button>
+              </div>
             </CardContent>
           </Card>
-        ))}
-      </div>
+        </form>
+      )}
 
-      <Card className="border-slate-200 shadow-sm">
-        <CardHeader>
-          <CardTitle className="text-lg">Employee history</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {me.recent.length === 0 ? (
-            <p className="text-sm text-slate-500">
-              No letters yet.{" "}
-              <Link href="/dashboard/issue" className="text-indigo-700 underline">
-                Issue the first one
-              </Link>
-              .
-            </p>
+      {!editing && (
+        <div className="space-y-3">
+          {loading ? (
+            <p className="text-sm text-slate-500">Loading…</p>
+          ) : formats.length === 0 ? (
+            <Card className="border-dashed border-slate-300">
+              <CardContent className="pt-4 text-sm text-slate-600">
+                No formats yet. Press <strong>New format</strong> to start with a ready-made text.
+              </CardContent>
+            </Card>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="text-xs uppercase text-slate-500">
-                  <tr>
-                    <th className="py-2 pr-4">Employee</th>
-                    <th className="py-2 pr-4">Position</th>
-                    <th className="py-2 pr-4">Issued</th>
-                    <th className="py-2">Check</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {me.recent.map((l) => (
-                    <tr key={l.id} className="border-t border-slate-100">
-                      <td className="py-2 pr-4 font-medium text-slate-900">{l.employeeName}</td>
-                      <td className="py-2 pr-4 text-slate-600">{l.position ?? "-"}</td>
-                      <td className="py-2 pr-4 text-slate-600">{formatDate(l.issuedAt)}</td>
-                      <td className="py-2">
-                        <a
-                          href={`/verify/${l.id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-indigo-700 underline"
-                        >
-                          Verify
-                        </a>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            formats.map((f) => (
+              <Card key={f.id} className="border-slate-200 shadow-sm">
+                <CardContent className="space-y-3 pt-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-slate-900">{f.name}</p>
+                      <Badge
+                        className={f.status === "Generated" ? "bg-emerald-600 text-white" : "bg-slate-500 text-white"}
+                      >
+                        {f.status === "Generated" ? "Ready" : "Draft"}
+                      </Badge>
+                    </div>
+                    <div className="flex gap-2">
+                      {f.status === "Draft" && (
+                        <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700" disabled={busy} onClick={() => void handleGenerate(f)}>
+                          Generate
+                        </Button>
+                      )}
+                      <Button size="sm" variant="outline" disabled={busy} onClick={() => openEditor(f)}>
+                        Edit
+                      </Button>
+                      <Button size="sm" variant="destructive" disabled={busy} onClick={() => void handleDelete(f)}>
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                  <p className="line-clamp-3 whitespace-pre-line text-sm text-slate-600">{f.body}</p>
+                  <p className="text-xs text-slate-500">
+                    Signed by {f.signerName}, {f.signerTitle}
+                  </p>
+                </CardContent>
+              </Card>
+            ))
           )}
-        </CardContent>
-      </Card>
+        </div>
+      )}
     </div>
   );
 }

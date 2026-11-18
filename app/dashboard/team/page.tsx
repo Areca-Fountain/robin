@@ -1,605 +1,182 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import type { BrowserWallet } from "@meshsdk/core";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useCompany } from "@/components/dashboard/CompanyProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { sha256Hex } from "@/lib/hash";
-import { generateLetterPdf } from "@/lib/letter-pdf";
-import { formatDateOnly, renderTemplate, todayIso } from "@/lib/letter-format";
-import { walletKey } from "@/lib/wallet-key";
 
-// Must match METADATA_LABEL in lib/cardano.ts (that file is server-only, so the
-// number is repeated here on purpose).
-const METADATA_LABEL = 7283;
-
-// Wait up to ~3 minutes for Cardano to confirm (36 x 5 seconds)
-const POLL_INTERVAL_MS = 5000;
-const POLL_MAX_TRIES = 36;
-
-interface Format {
+interface Member {
   id: string;
-  name: string;
-  body: string;
-  signerName: string;
-  signerTitle: string;
-  status: "Draft" | "Generated";
+  email: string;
+  role: "secondary" | "team";
+  createdAt: string;
 }
 
-interface PendingRecord {
-  letterId: string;
-  letterHash: string;
-  txHash: string;
-  employeeName: string;
-  position: string;
-  formatId: string;
-  fileName: string;
-  blobUrl: string;
-  verifyUrl: string;
-}
+export default function TeamPage() {
+  const { me, authFetch } = useCompany();
+  const [members, setMembers] = useState<Member[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
-interface IssuedLetter {
-  letterId: string;
-  txHash: string;
-  letterHash: string;
-  employeeName: string;
-  fileName: string;
-  blobUrl: string;
-  verifyUrl: string;
-}
-
-type Step = "idle" | "pdf" | "sign" | "submit" | "confirm" | "done" | "timeout";
-
-const STEP_LABELS = [
-  { key: "pdf", label: "Creating the PDF" },
-  { key: "sign", label: "Approve in Lace" },
-  { key: "submit", label: "Sending to Cardano" },
-  { key: "confirm", label: "Waiting for confirmation" },
-];
-
-function slug(text: string): string {
-  return (
-    text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) ||
-    "employee"
-  );
-}
-
-export default function IssueLetterPage() {
-  const { me, authFetch, refresh } = useCompany();
-  const walletRef = useRef<BrowserWallet | null>(null);
-
-  // Formats
-  const [formats, setFormats] = useState<Format[]>([]);
-  const [formatsLoading, setFormatsLoading] = useState(true);
-  const [formatId, setFormatId] = useState("");
-
-  // Wallet
-  const [connecting, setConnecting] = useState(false);
-  const [walletAddress, setWalletAddress] = useState("");
-  const [connectError, setConnectError] = useState("");
-
-  // Letter fields
-  const [employeeName, setEmployeeName] = useState("");
-  const [nic, setNic] = useState("");
-  const [position, setPosition] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [stillEmployed, setStillEmployed] = useState(false);
-  const [endDate, setEndDate] = useState("");
-
-  // Progress
-  const [step, setStep] = useState<Step>("idle");
-  const [errorMsg, setErrorMsg] = useState("");
-  const [pendingRecord, setPendingRecord] = useState<PendingRecord | null>(null);
-  const [issued, setIssued] = useState<IssuedLetter | null>(null);
-
-  const busy = step === "pdf" || step === "sign" || step === "submit" || step === "confirm";
-
-  const loadFormats = useCallback(async () => {
+  const reloadTeam = useCallback(async () => {
     try {
-      const res = await authFetch("/api/formats", { action: "list" });
+      const res = await authFetch("/api/team", { action: "list" });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Could not load formats.");
-      const ready = (data.formats as Format[]).filter((f) => f.status === "Generated");
-      setFormats(ready);
-      setFormatId((current) => current || ready[0]?.id || "");
+      if (!res.ok) throw new Error(data.error ?? "Could not load team.");
+      setMembers((data.members as Member[]).filter((m) => m.role === "team"));
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "Could not load formats.");
+      setError(err instanceof Error ? err.message : "Could not load team.");
     } finally {
-      setFormatsLoading(false);
+      setLoading(false);
     }
   }, [authFetch]);
 
   useEffect(() => {
-    void loadFormats();
-  }, [loadFormats]);
-
-  const format = formats.find((f) => f.id === formatId) ?? null;
-
-  function buildVars() {
-    return {
-      company_name: me?.company.name ?? "",
-      employee_name: employeeName,
-      nic,
-      position,
-      start_date: startDate ? formatDateOnly(startDate) : "",
-      end_date: stillEmployed ? "date" : endDate ? formatDateOnly(endDate) : "",
-      issue_date: formatDateOnly(todayIso()),
-    };
-  }
-
-  const preview = format ? renderTemplate(format.body, buildVars()) : "";
-
-  // ---------------------------------------------------------------------------
-  // Connect Lace and check it is THIS company's registered wallet
-  // ---------------------------------------------------------------------------
-  async function handleConnect() {
-    if (!me) return;
-    setConnectError("");
-    setConnecting(true);
-    try {
-      const mesh = await import("@meshsdk/core");
-
-      let wallet: BrowserWallet;
+    let active = true;
+    async function initialLoad() {
       try {
-        wallet = await mesh.BrowserWallet.enable("lace");
-      } catch {
-        throw new Error(
-          "Could not open Lace. Install the Lace extension, unlock it, refresh this page and try again."
-        );
-      }
-
-      if ((await wallet.getNetworkId()) !== 0) {
-        throw new Error(
-          "Lace is on the Cardano mainnet. Switch Lace to the Preprod test network and connect again."
-        );
-      }
-
-      const address = await wallet.getChangeAddress();
-      const connectedKey = walletKey(address);
-      const registeredKey = walletKey(me.company.walletAddress);
-      if (!connectedKey || !registeredKey || connectedKey !== registeredKey) {
-        throw new Error(
-          "This is not the wallet your company registered with. Switch to the registered wallet in Lace and connect again."
-        );
-      }
-
-      walletRef.current = wallet;
-      setWalletAddress(address);
-    } catch (err) {
-      walletRef.current = null;
-      setWalletAddress("");
-      setConnectError(err instanceof Error ? err.message : "Could not connect the wallet.");
-    } finally {
-      setConnecting(false);
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Ask the server to confirm the transaction and save the letter record
-  // ---------------------------------------------------------------------------
-  async function confirmOnServer(record: PendingRecord) {
-    setStep("confirm");
-    setErrorMsg("");
-    let failures = 0;
-
-    for (let attempt = 0; attempt < POLL_MAX_TRIES; attempt++) {
-      try {
-        const res = await authFetch("/api/issue", {
-          letterId: record.letterId,
-          letterHash: record.letterHash,
-          txHash: record.txHash,
-          employeeName: record.employeeName,
-          position: record.position,
-          formatId: record.formatId,
-        });
-        const data = await res.json().catch(() => ({}));
-
-        if (res.status === 200 && data.status === "issued") {
-          setIssued({
-            letterId: record.letterId,
-            txHash: record.txHash,
-            letterHash: record.letterHash,
-            employeeName: record.employeeName,
-            fileName: record.fileName,
-            blobUrl: record.blobUrl,
-            verifyUrl: record.verifyUrl,
-          });
-          setPendingRecord(null);
-          setStep("done");
-          void refresh();
-          return;
-        }
-
-        if (res.status === 202) {
-          failures = 0;
-        } else if (res.status === 502) {
-          failures++;
-          if (failures >= 4) throw new Error(data.error ?? "The blockchain data service is not responding.");
-        } else {
-          throw new Error(data.error ?? "The server could not record this letter.");
-        }
+        const res = await authFetch("/api/team", { action: "list" });
+        const data = await res.json();
+        if (!active) return;
+        if (!res.ok) throw new Error(data.error ?? "Could not load team.");
+        setMembers((data.members as Member[]).filter((m) => m.role === "team"));
       } catch (err) {
-        if (err instanceof TypeError) {
-          failures++;
-          if (failures >= 4) {
-            setErrorMsg("Lost connection to the server. Check your internet and press Check again.");
-            setPendingRecord(record);
-            setStep("timeout");
-            return;
-          }
-        } else {
-          setErrorMsg(err instanceof Error ? err.message : "Something went wrong.");
-          setPendingRecord(record);
-          setStep("timeout");
-          return;
-        }
+        if (active) setError(err instanceof Error ? err.message : "Could not load team.");
+      } finally {
+        if (active) setLoading(false);
       }
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     }
+    void initialLoad();
+    return () => {
+      active = false;
+    };
+  }, [authFetch]);
 
-    setErrorMsg(
-      "Cardano has not confirmed the transaction yet. Your letter is safe. Press Check again in a minute."
-    );
-    setPendingRecord(record);
-    setStep("timeout");
-  }
-
-  // ---------------------------------------------------------------------------
-  // PDF -> hash -> sign -> submit -> confirm
-  // ---------------------------------------------------------------------------
-  async function handleIssue(e: React.FormEvent) {
+  async function handleAdd(e: FormEvent) {
     e.preventDefault();
-    setErrorMsg("");
-
-    const wallet = walletRef.current;
-    if (!me || !format) {
-      setErrorMsg("Choose a format first.");
-      return;
-    }
-    if (!wallet) {
-      setErrorMsg("Connect your company wallet first.");
-      return;
-    }
-    if (!employeeName.trim() || !position.trim() || !startDate) {
-      setErrorMsg("Employee name, position and start date are required.");
-      return;
-    }
-    if (!stillEmployed) {
-      if (!endDate) {
-        setErrorMsg("Enter the end date, or tick that the employee is still working here.");
-        return;
-      }
-      if (endDate < startDate) {
-        setErrorMsg("The end date cannot be before the start date.");
-        return;
-      }
-    }
-
+    setBusy(true);
+    setError("");
     try {
-      setStep("pdf");
-      const letterId = crypto.randomUUID();
-      const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || window.location.origin).replace(/\/+$/, "");
-      const verifyUrl = `${baseUrl}/verify/${letterId}`;
-
-      const pdfBytes = await generateLetterPdf({
-        letterId,
-        companyName: me.company.name,
-        employeeName: employeeName.trim(),
-        body: renderTemplate(format.body, buildVars()),
-        signerName: format.signerName,
-        signerTitle: format.signerTitle,
-        issueDate: todayIso(),
-        verifyUrl,
+      const res = await authFetch("/api/team", {
+        action: "add",
+        role: "team",
+        email,
       });
-
-      const blob = new Blob([new Uint8Array(pdfBytes)], { type: "application/pdf" });
-      const letterHash = await sha256Hex(blob);
-      const blobUrl = URL.createObjectURL(blob);
-      const fileName = `service-letter-${slug(employeeName)}.pdf`;
-
-      // Only the fingerprint goes on-chain
-      setStep("sign");
-      const { Transaction } = await import("@meshsdk/core");
-      const changeAddress = await wallet.getChangeAddress();
-
-      const tx = new Transaction({ initiator: wallet });
-      // A transaction needs an output, so the company sends 2 test ADA to itself.
-      tx.sendLovelace(changeAddress, "2000000");
-      tx.setMetadata(METADATA_LABEL, { hash: letterHash, v: 1 });
-
-      const unsignedTx = await tx.build();
-      const signedTx = await wallet.signTx(unsignedTx);
-
-      setStep("submit");
-      const txHash = await wallet.submitTx(signedTx);
-
-      await confirmOnServer({
-        letterId,
-        letterHash,
-        txHash,
-        employeeName: employeeName.trim(),
-        position: position.trim(),
-        formatId: format.id,
-        fileName,
-        blobUrl,
-        verifyUrl,
-      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not add member.");
+      setEmail("");
+      await reloadTeam();
     } catch (err) {
-      setStep("idle");
-      const message = err instanceof Error ? err.message : String(err);
-      if (/declin|reject|cancel|denied/i.test(message)) {
-        setErrorMsg("You cancelled the request in Lace. Nothing was sent.");
-      } else if (/insufficient|utxo|balance/i.test(message)) {
-        setErrorMsg(
-          "Not enough test ADA in this wallet. Get free Preprod ADA from the Cardano testnet faucet and try again."
-        );
-      } else {
-        setErrorMsg(`Could not issue the letter: ${message}`);
-      }
-      console.error(err);
+      setError(err instanceof Error ? err.message : "Could not add member.");
+    } finally {
+      setBusy(false);
     }
   }
 
-  function resetForNext() {
-    if (issued) URL.revokeObjectURL(issued.blobUrl);
-    setIssued(null);
-    setPendingRecord(null);
-    setStep("idle");
-    setErrorMsg("");
-    setEmployeeName("");
-    setNic("");
-    setPosition("");
-    setStartDate("");
-    setEndDate("");
-    setStillEmployed(false);
+  async function handleRemove(id: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await authFetch("/api/team", { action: "remove", id });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not remove member.");
+      await reloadTeam();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove member.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!me) return null;
 
-  // ---------------------------------------------------------------------------
-  // Success
-  // ---------------------------------------------------------------------------
-  if (step === "done" && issued) {
+  if (me.role === "team") {
     return (
-      <Card className="border-slate-200 shadow-lg">
-        <CardHeader className="space-y-2 text-center">
-          <div className="flex justify-center">
-            <Badge variant="outline" className="border-emerald-300 bg-emerald-100 px-4 py-1 text-sm font-semibold text-emerald-800">
-              Recorded on Cardano
-            </Badge>
-          </div>
-          <CardTitle className="text-2xl font-bold text-slate-900">Letter issued</CardTitle>
-          <CardDescription>
-            The fingerprint of this letter is now on the blockchain. Download the PDF and give it
-            to {issued.employeeName}.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4 text-sm">
-          <a
-            href={issued.blobUrl}
-            download={issued.fileName}
-            className="inline-flex h-9 w-full items-center justify-center rounded-lg bg-indigo-600 px-2.5 text-sm font-medium text-white hover:bg-indigo-700"
-          >
-            Download the PDF
-          </a>
-          <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
-            Download it now and keep this exact file. If it is changed or created again, its
-            fingerprint will not match the blockchain record.
-          </p>
-
-          <div className="space-y-3 rounded-lg bg-slate-100 p-4">
-            <div>
-              <span className="mb-1 block text-slate-500">Verification link (also in the QR code)</span>
-              <a href={issued.verifyUrl} target="_blank" rel="noopener noreferrer" className="block break-all rounded border bg-white p-2 text-xs text-indigo-700 underline">
-                {issued.verifyUrl}
-              </a>
-            </div>
-            <div>
-              <span className="mb-1 block text-slate-500">Cardano transaction</span>
-              <a href={`https://preprod.cardanoscan.io/transaction/${issued.txHash}`} target="_blank" rel="noopener noreferrer" className="block break-all rounded border bg-white p-2 text-xs text-indigo-700 underline">
-                {issued.txHash}
-              </a>
-            </div>
-            <div>
-              <span className="mb-1 block text-slate-500">Letter fingerprint (SHA-256)</span>
-              <code className="block break-all rounded border bg-white p-2 text-xs text-slate-700">{issued.letterHash}</code>
-            </div>
-          </div>
-
-          <Button variant="outline" className="w-full" onClick={resetForNext}>
-            Issue another letter
-          </Button>
+      <Card className="border-slate-200">
+        <CardContent className="pt-6 text-sm text-slate-600">
+          Only the primary and secondary accounts can manage team members.
         </CardContent>
       </Card>
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Form
-  // ---------------------------------------------------------------------------
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Issue Service Letter</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Assign Team</h1>
         <p className="mt-1 text-slate-600">
-          Choose a ready format, fill in the employee&apos;s details, and Robin creates the PDF
-          and records its fingerprint on Cardano.
+          Add HR staff or coordinators by their Google email so they can create formats and issue service letters.
         </p>
       </div>
 
-      {!me.company.verified && (
-        <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Your company is not verified yet. You can issue letters, but scanners will see
-          &quot;Not verified&quot; until Robin&apos;s team approves it.
-        </p>
-      )}
-
-      {formatsLoading ? (
-        <p className="text-sm text-slate-500">Loading formats…</p>
-      ) : formats.length === 0 ? (
-        <Card className="border-dashed border-slate-300">
-          <CardContent className="pt-4 text-sm text-slate-700">
-            You have no ready formats yet. Go to{" "}
-            <Link href="/dashboard/formats" className="text-indigo-700 underline">
-              Manage Formats
-            </Link>
-            , create one and press <strong>Generate</strong>.
-          </CardContent>
-        </Card>
-      ) : (
-        <>
-          <Card className="border-slate-200 shadow-sm">
-            <CardHeader>
-              <CardTitle className="text-lg">1. Company wallet</CardTitle>
-              <CardDescription>
-                Letters are paid for and signed with the wallet your company registered with.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {walletAddress ? (
-                <div className="space-y-1 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm">
-                  <Badge className="bg-emerald-600 text-white">Wallet connected</Badge>
-                  <code className="block break-all text-xs text-slate-600">{walletAddress}</code>
-                </div>
-              ) : (
-                <Button type="button" onClick={handleConnect} disabled={connecting} className="bg-indigo-600 hover:bg-indigo-700">
-                  {connecting ? "Connecting…" : "Connect Lace wallet"}
-                </Button>
-              )}
-              {connectError && (
-                <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
-                  {connectError}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          <form onSubmit={handleIssue}>
-            <Card className="border-slate-200 shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-lg">2. Letter details</CardTitle>
-                <CardDescription>Use English letters only.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <fieldset disabled={busy} className="space-y-4">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="format">Format</Label>
-                    <select
-                      id="format"
-                      value={formatId}
-                      onChange={(e) => setFormatId(e.target.value)}
-                      className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                    >
-                      {formats.map((f) => (
-                        <option key={f.id} value={f.id}>
-                          {f.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="employeeName">Employee name *</Label>
-                      <Input id="employeeName" value={employeeName} onChange={(e) => setEmployeeName(e.target.value)} maxLength={120} required />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="nic">NIC number (optional)</Label>
-                      <Input id="nic" value={nic} onChange={(e) => setNic(e.target.value)} maxLength={20} />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label htmlFor="position">Position / designation *</Label>
-                    <Input id="position" value={position} onChange={(e) => setPosition(e.target.value)} maxLength={120} required />
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="startDate">Start date *</Label>
-                      <Input id="startDate" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="endDate">End date</Label>
-                      <Input id="endDate" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} disabled={stillEmployed} />
-                    </div>
-                  </div>
-
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
-                    <input type="checkbox" checked={stillEmployed} onChange={(e) => setStillEmployed(e.target.checked)} />
-                    The employee is still working here
-                  </label>
-                </fieldset>
-
-                <Separator />
-
-                <div>
-                  <p className="mb-1 text-sm font-medium text-slate-700">Letter preview</p>
-                  <div className="whitespace-pre-line rounded-lg border bg-white p-4 text-sm text-slate-800">
-                    {preview}
-                  </div>
-                  {format && (
-                    <p className="mt-1 text-xs text-slate-500">
-                      Signed by {format.signerName}, {format.signerTitle}. The PDF also gets a
-                      QR code.
-                    </p>
-                  )}
-                </div>
-
-                {errorMsg && (
-                  <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
-                    {errorMsg}
-                  </p>
-                )}
-
-                {(busy || step === "timeout") && (
-                  <ol className="space-y-2 rounded-lg bg-slate-100 p-4 text-sm">
-                    {STEP_LABELS.map((s, i) => {
-                      const order = ["pdf", "sign", "submit", "confirm"];
-                      const current = step === "timeout" ? 3 : order.indexOf(step);
-                      const state = i < current ? "done" : i === current ? "active" : "todo";
-                      return (
-                        <li
-                          key={s.key}
-                          className={
-                            state === "done"
-                              ? "text-emerald-700"
-                              : state === "active"
-                                ? "font-semibold text-slate-900"
-                                : "text-slate-400"
-                          }
-                        >
-                          {state === "done" ? "✓" : state === "active" ? "…" : "○"} {s.label}
-                        </li>
-                      );
-                    })}
-                  </ol>
-                )}
-
-                {step === "timeout" && pendingRecord ? (
-                  <Button type="button" className="w-full bg-indigo-600 hover:bg-indigo-700" onClick={() => void confirmOnServer(pendingRecord)}>
-                    Check again
-                  </Button>
-                ) : (
-                  <Button type="submit" disabled={busy || !walletAddress || !format} className="w-full bg-indigo-600 hover:bg-indigo-700">
-                    {busy ? "Working…" : "Create PDF and record on Cardano"}
-                  </Button>
-                )}
-                <p className="text-xs text-slate-500">
-                  Lace will ask you to approve one small transaction (about 2 test ADA that returns
-                  to your wallet, plus a network fee of under 0.3 ADA).
-                </p>
-              </CardContent>
-            </Card>
+      <Card className="border-slate-200 shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-lg">Add team member</CardTitle>
+          <CardDescription>
+            Team members can manage formats and issue letters, but cannot change account settings or manage the team.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <form onSubmit={handleAdd} className="flex flex-wrap items-end gap-3">
+            <div className="min-w-60 flex-1 space-y-1.5">
+              <Label htmlFor="teamEmail">Member Gmail address</Label>
+              <Input
+                id="teamEmail"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="hr.staff@gmail.com"
+                required
+              />
+            </div>
+            <Button type="submit" disabled={busy} className="bg-indigo-600 hover:bg-indigo-700">
+              {busy ? "Adding…" : "Add member"}
+            </Button>
           </form>
-        </>
-      )}
+          {error && (
+            <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
+              {error}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-slate-200 shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-lg">Team members ({members.length})</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <p className="text-sm text-slate-500">Loading…</p>
+          ) : members.length === 0 ? (
+            <p className="text-sm text-slate-500">No team members added yet.</p>
+          ) : (
+            <div className="divide-y">
+              {members.map((m) => (
+                <div key={m.id} className="flex items-center justify-between gap-3 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-slate-900">{m.email}</span>
+                    <Badge variant="secondary" className="text-xs">Team</Badge>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={busy}
+                    onClick={() => void handleRemove(m.id)}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
