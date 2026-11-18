@@ -128,13 +128,13 @@ export default function RegistrarDashboardPage() {
     const filePath = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
     const { error: uploadError } = await supabase.storage
-      .from("company-documents")
-      .upload(filePath, file, { upsert: true });
+  .from("company-docs")            // was "company-documents"
+  .upload(filePath, file,);
 
-    if (uploadError) throw uploadError;
+if (uploadError) throw uploadError;
 
-    const { data } = supabase.storage.from("company-documents").getPublicUrl(filePath);
-    return data.publicUrl;
+const { data } = supabase.storage.from("company-docs").getPublicUrl(filePath);
+return data.publicUrl;
   };
 
   // Load Registrar's Submitted Companies
