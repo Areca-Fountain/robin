@@ -170,6 +170,18 @@ export default function RegisterCompanyPage() {
         data: { user },
       } = await supabase.auth.getUser();
 
+      // If the signed-in user is a registrar, record them as the submitting registrar so the
+      // admin dashboard shows "Via Registrar" and the registrar dashboard counts this submission.
+      let registrarUserId: string | null = null;
+      if (user) {
+        const { data: registrarRow } = await supabase
+          .from("registrar_profiles")
+          .select("user_id")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (registrarRow) registrarUserId = user.id;
+      }
+
       const repLetterUrl = await uploadFileToSupabase(repLetterFile, "letters");
       const brDocUrl = await uploadFileToSupabase(brFile, "br-docs");
       const kycDocUrl = await uploadFileToSupabase(kycFile, "kyc-docs");
@@ -179,6 +191,7 @@ export default function RegisterCompanyPage() {
         .insert([
           {
             user_id: user?.id || null,
+            registrar_user_id: registrarUserId,
             rep_name: repName,
             rep_email: repEmail,
             rep_role: repRole,

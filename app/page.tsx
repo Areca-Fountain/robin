@@ -25,6 +25,11 @@ export default function HomePage() {
               Register a Company
             </Button>
           </Link>
+          <Link href="/verify">
+            <Button size="lg" variant="outline" className="px-8">
+              Verify a Service Letter
+            </Button>
+          </Link>
         </div>
       </div>
     </main>

@@ -111,8 +111,8 @@ export async function POST(req: Request) {
 
     // 5. The transaction must come from the wallet registered for the issuing company
     if (
-      onChain.issuerAddress &&
-      row.issuer_address &&
+      !onChain.issuerAddress ||
+      !row.issuer_address ||
       onChain.issuerAddress !== row.issuer_address
     ) {
       return reply({
