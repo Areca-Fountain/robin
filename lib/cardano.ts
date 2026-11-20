@@ -5,7 +5,7 @@ const BLOCKFROST_URL =
   process.env.BLOCKFROST_URL ?? "https://cardano-preprod.blockfrost.io/api/v0";
 
 /**
- * The transaction metadata label Head Lock uses.
+ * The transaction metadata label Robin uses.
  * Issuing a letter must write metadata like:
  *   { "7283": { "hash": "<64-char sha256 hex>", "v": 1 } }
  * Keep this number identical in your issue flow.
