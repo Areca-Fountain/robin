@@ -1,0 +1,15 @@
+name = "areca-fountain/robin"
+version = "0.0.0"
+compiler = "v1.1.24"
+plutus = "v3"
+description = "Robin: on-chain registry and revocation for blockchain-verified service letters"
+
+[repository]
+user = "Areca-Fountain"
+project = "robin"
+platform = "github"
+
+[[dependencies]]
+name = "aiken-lang/stdlib"
+version = "v2.2.0"
+source = "github"

@@ -1,0 +1,3 @@
+# Aiken build output (plutus.json is committed on purpose, the rest is not)
+build/
+docs/
