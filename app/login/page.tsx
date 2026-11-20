@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { fetchAccount } from "@/lib/client-auth";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -18,11 +19,27 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  // Already signed in? Go straight to the dashboard.
+  // Already signed in? Send each account to its own portal.
   useEffect(() => {
-    void supabase.auth.getSession().then(({ data }) => {
-      if (data.session) router.replace("/dashboard");
-    });
+    let active = true;
+    void fetchAccount()
+      .then((account) => {
+        if (!active || !account) return;
+        if (account.role !== "none") {
+          router.replace(account.home);
+        } else {
+          setError(
+            account.conflict ??
+              "This Google account isn't linked to any company. Use the email your company registered with, or register your company first."
+          );
+        }
+      })
+      .catch((err: unknown) => {
+        if (active) setError(err instanceof Error ? err.message : "Could not check your account.");
+      });
+    return () => {
+      active = false;
+    };
   }, [router]);
 
   async function handleGoogle() {
@@ -30,7 +47,7 @@ export default function LoginPage() {
     setBusy(true);
     const { error: signInError } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/dashboard` },
+      options: { redirectTo: `${window.location.origin}/login` },
     });
     if (signInError) {
       setError(signInError.message);
@@ -44,8 +61,8 @@ export default function LoginPage() {
         <CardHeader className="text-center space-y-2">
           <CardTitle className="text-2xl font-bold text-slate-900">Company login</CardTitle>
           <CardDescription>
-            Sign in with the Google account your company registered with, or the one your
-            company added you with.
+            Company accounts only. Sign in with the Google account your company registered with,
+            or the one your company added you with.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -66,6 +83,16 @@ export default function LoginPage() {
             >
               {error}
             </p>
+          )}
+
+          {error && (
+            <button
+              type="button"
+              className="w-full text-center text-xs text-slate-500 hover:text-slate-800"
+              onClick={() => void supabase.auth.signOut().then(() => setError(""))}
+            >
+              Sign out and try another account
+            </button>
           )}
 
           <p className="text-center text-sm text-slate-600">

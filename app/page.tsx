@@ -1,7 +1,97 @@
+"use client";
+
 import Link from "next/link";
+import { supabase } from "@/lib/supabase";
+import { useAccount } from "@/components/auth/useAccount";
 import { Button } from "@/components/ui/button";
 
+interface PortalCard {
+  tag: string;
+  tagClass: string;
+  title: string;
+  text: string;
+  href: string;
+  cta: string;
+  variant: "default" | "outline" | "secondary";
+}
+
+const REGISTRAR_CARD: PortalCard = {
+  tag: "For Registrars",
+  tagClass: "text-indigo-600",
+  title: "Registrar Portal",
+  text: "Sign in with Google to submit third-party company registrations, verify NIC/BR KYC, and manage subscriptions.",
+  href: "/registrar",
+  cta: "Open Registrar Portal",
+  variant: "default",
+};
+
+const REGISTER_COMPANY_CARD: PortalCard = {
+  tag: "For Businesses",
+  tagClass: "text-emerald-600",
+  title: "Register a Company",
+  text: "Register your company directly by uploading your BR/ROC and connecting your Cardano Lace wallet.",
+  href: "/register-company",
+  cta: "Register Company",
+  variant: "outline",
+};
+
+const COMPANY_LOGIN_CARD: PortalCard = {
+  tag: "For Businesses",
+  tagClass: "text-emerald-600",
+  title: "Company Login",
+  text: "Already registered? Sign in with your company Google account to issue and manage service letters.",
+  href: "/login",
+  cta: "Company Login",
+  variant: "outline",
+};
+
+const COMPANY_DASHBOARD_CARD: PortalCard = {
+  ...COMPANY_LOGIN_CARD,
+  title: "Company Dashboard",
+  text: "Issue service letters, manage formats and your team, and check your verification status.",
+  href: "/dashboard",
+  cta: "Open Company Dashboard",
+  variant: "default",
+};
+
+const VERIFY_CARD: PortalCard = {
+  tag: "Public Check",
+  tagClass: "text-purple-600",
+  title: "Verify Service Letter",
+  text: "Scan QR or enter document hash to check authenticity and company verification status.",
+  href: "/verify",
+  cta: "Verify Letter",
+  variant: "outline",
+};
+
+const ADMIN_CARD: PortalCard = {
+  tag: "Robin Team",
+  tagClass: "text-slate-600",
+  title: "Admin Dashboard",
+  text: "Review company BR submissions, approve registrar NIC/BR KYC, and manage system users.",
+  href: "/manage-applications",
+  cta: "Open Admin Panel",
+  variant: "default",
+};
+
 export default function HomePage() {
+  const { loading, account } = useAccount();
+  const role = account?.role ?? "none";
+
+  // Each role only sees its own portal. Visiting the public pages is open to everyone.
+  let cards: PortalCard[];
+  if (account && role === "admin") cards = [ADMIN_CARD, VERIFY_CARD];
+  else if (account && role === "company") cards = [COMPANY_DASHBOARD_CARD, VERIFY_CARD];
+  else if (account && role === "registrar") cards = [REGISTRAR_CARD, VERIFY_CARD];
+  else cards = [REGISTRAR_CARD, REGISTER_COMPANY_CARD, COMPANY_LOGIN_CARD, VERIFY_CARD];
+
+  const navLinks = cards.map((c) => ({ href: c.href, label: c.title === "Verify Service Letter" ? "Verify Letter" : c.title }));
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    window.location.href = "/";
+  }
+
   return (
     <main className="min-h-screen bg-slate-50 flex flex-col justify-between">
       {/* Top Navbar */}
@@ -11,31 +101,24 @@ export default function HomePage() {
             Robin <span className="text-indigo-600">Verification</span>
           </Link>
           <nav className="flex flex-wrap items-center gap-2 sm:gap-3 text-sm">
-            <Link href="/registrar">
-              <Button variant="ghost" size="sm">
-                Registrar Portal
-              </Button>
-            </Link>
-            <Link href="/register-company">
-              <Button variant="ghost" size="sm">
-                Register Company
-              </Button>
-            </Link>
-            <Link href="/dashboard">
-              <Button variant="ghost" size="sm">
-                Company Dashboard
-              </Button>
-            </Link>
-            <Link href="/verify">
-              <Button variant="ghost" size="sm">
-                Verify Letter
-              </Button>
-            </Link>
-            <Link href="/manage-applications">
-              <Button size="sm" variant="outline">
-                Admin Panel
-              </Button>
-            </Link>
+            {!loading &&
+              navLinks.map((link) => (
+                <Link key={link.href} href={link.href}>
+                  <Button variant="ghost" size="sm">
+                    {link.label}
+                  </Button>
+                </Link>
+              ))}
+            {account && (
+              <>
+                <span className="hidden sm:inline text-xs text-slate-500 capitalize">
+                  {account.email} · {role === "none" ? "no role yet" : role}
+                </span>
+                <Button size="sm" variant="outline" onClick={() => void signOut()}>
+                  Sign out
+                </Button>
+              </>
+            )}
           </nav>
         </div>
       </header>
@@ -54,68 +137,36 @@ export default function HomePage() {
           </p>
         </div>
 
-        {/* 4 Main Portal Entry Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 text-left">
-          <div className="bg-white p-6 rounded-2xl border shadow-2xs flex flex-col justify-between space-y-4">
-            <div className="space-y-2">
-              <span className="text-xs font-bold uppercase text-indigo-600">For Registrars</span>
-              <h2 className="text-lg font-bold text-slate-900">Registrar Portal</h2>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Sign in with Google to submit third-party company registrations, verify NIC/BR KYC, and manage subscriptions.
-              </p>
-            </div>
-            <Link href="/registrar">
-              <Button className="w-full bg-indigo-600 hover:bg-indigo-700">
-                Open Registrar Portal
-              </Button>
-            </Link>
+        {!loading && (
+          <div
+            className={`grid grid-cols-1 gap-5 text-left ${
+              cards.length >= 4
+                ? "sm:grid-cols-2 lg:grid-cols-4"
+                : "sm:grid-cols-2 max-w-2xl mx-auto"
+            }`}
+          >
+            {cards.map((card) => (
+              <div
+                key={card.href}
+                className="bg-white p-6 rounded-2xl border shadow-2xs flex flex-col justify-between space-y-4"
+              >
+                <div className="space-y-2">
+                  <span className={`text-xs font-bold uppercase ${card.tagClass}`}>{card.tag}</span>
+                  <h2 className="text-lg font-bold text-slate-900">{card.title}</h2>
+                  <p className="text-xs text-slate-500 leading-relaxed">{card.text}</p>
+                </div>
+                <Link href={card.href}>
+                  <Button
+                    variant={card.variant}
+                    className={`w-full ${card.variant === "default" ? "bg-indigo-600 hover:bg-indigo-700" : ""}`}
+                  >
+                    {card.cta}
+                  </Button>
+                </Link>
+              </div>
+            ))}
           </div>
-
-          <div className="bg-white p-6 rounded-2xl border shadow-2xs flex flex-col justify-between space-y-4">
-            <div className="space-y-2">
-              <span className="text-xs font-bold uppercase text-emerald-600">For Businesses</span>
-              <h2 className="text-lg font-bold text-slate-900">Register a Company</h2>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Register your company directly by uploading your BR/ROC and connecting your Cardano Lace wallet.
-              </p>
-            </div>
-            <Link href="/register-company">
-              <Button variant="outline" className="w-full">
-                Register Company
-              </Button>
-            </Link>
-          </div>
-
-          <div className="bg-white p-6 rounded-2xl border shadow-2xs flex flex-col justify-between space-y-4">
-            <div className="space-y-2">
-              <span className="text-xs font-bold uppercase text-purple-600">Public Check</span>
-              <h2 className="text-lg font-bold text-slate-900">Verify Service Letter</h2>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Scan QR or enter document hash to check authenticity and company verification status.
-              </p>
-            </div>
-            <Link href="/verify">
-              <Button variant="outline" className="w-full">
-                Verify Letter
-              </Button>
-            </Link>
-          </div>
-
-          <div className="bg-white p-6 rounded-2xl border shadow-2xs flex flex-col justify-between space-y-4">
-            <div className="space-y-2">
-              <span className="text-xs font-bold uppercase text-slate-600">Robin Team</span>
-              <h2 className="text-lg font-bold text-slate-900">Admin Dashboard</h2>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Review company BR submissions, approve registrar NIC/BR KYC, and manage system users.
-              </p>
-            </div>
-            <Link href="/manage-applications">
-              <Button variant="secondary" className="w-full">
-                Open Admin Panel
-              </Button>
-            </Link>
-          </div>
-        </div>
+        )}
       </section>
 
       <footer className="border-t bg-white py-5 text-center text-xs text-slate-400">

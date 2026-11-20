@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { authedPost } from "@/lib/client-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -85,66 +86,60 @@ export default function AdminDashboardPage() {
     text: string;
   } | null>(null);
 
+  const [adminEmail, setAdminEmail] = useState("");
+
+  // Loads everything through the admin-only API (the server checks ADMIN_EMAILS)
+  const loadAdminData = useCallback(async () => {
+    const res = await authedPost("/api/admin/overview");
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error ?? "Failed to load admin data");
+    return json as {
+      adminEmail: string;
+      applications: CompanyApplication[];
+      registrars: RegistrarProfile[];
+    };
+  }, []);
+
   // Manual refresh handler
   const fetchAllAdminData = useCallback(async () => {
     setLoading(true);
     try {
-      const [appsRes, regRes] = await Promise.all([
-        supabase
-          .from("company_applications")
-          .select("*")
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("registrar_profiles")
-          .select("*")
-          .order("updated_at", { ascending: false }),
-      ]);
-
-      if (appsRes.error) throw appsRes.error;
-      setApplications((appsRes.data as CompanyApplication[]) || []);
-
-      if (!regRes.error && regRes.data) {
-        setRegistrars(regRes.data as RegistrarProfile[]);
-      }
+      const data = await loadAdminData();
+      setAdminEmail(data.adminEmail);
+      setApplications(data.applications);
+      setRegistrars(data.registrars);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to load admin data";
       setFeedbackMsg({ type: "error", text: msg });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadAdminData]);
 
   // Initial fetch on mount
   useEffect(() => {
     let isMounted = true;
 
-    Promise.all([
-      supabase
-        .from("company_applications")
-        .select("*")
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("registrar_profiles")
-        .select("*")
-        .order("updated_at", { ascending: false }),
-    ]).then(([appsRes, regRes]) => {
-      if (!isMounted) return;
-      if (appsRes.error) {
-        setFeedbackMsg({ type: "error", text: appsRes.error.message });
-      } else {
-        setApplications((appsRes.data as CompanyApplication[]) || []);
-      }
-
-      if (!regRes.error && regRes.data) {
-        setRegistrars(regRes.data as RegistrarProfile[]);
-      }
-      setLoading(false);
-    });
+    loadAdminData()
+      .then((data) => {
+        if (!isMounted) return;
+        setAdminEmail(data.adminEmail);
+        setApplications(data.applications);
+        setRegistrars(data.registrars);
+      })
+      .catch((err: unknown) => {
+        if (!isMounted) return;
+        const msg = err instanceof Error ? err.message : "Failed to load admin data";
+        setFeedbackMsg({ type: "error", text: msg });
+      })
+      .finally(() => {
+        if (isMounted) setLoading(false);
+      });
 
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [loadAdminData]);
 
   // Transition Pending company submission to "Under Review" when Admin previews/downloads
   const markAsUnderReviewIfPending = async (
@@ -153,13 +148,14 @@ export default function AdminDashboardPage() {
     if (app.status !== "Pending") return app;
 
     try {
-      const { error } = await supabase
-        .from("company_applications")
-        .update({ status: "Under Review" })
-        .eq("id", app.id)
-        .eq("status", "Pending");
+      const res = await authedPost("/api/admin/applications", {
+        id: app.id,
+        status: "Under Review",
+        onlyIfPending: true,
+      });
+      const json = await res.json().catch(() => ({}));
 
-      if (!error) {
+      if (res.ok) {
         const updatedApp: CompanyApplication = { ...app, status: "Under Review" };
         setApplications((prev) =>
           prev.map((item) => (item.id === app.id ? updatedApp : item))
@@ -230,12 +226,9 @@ export default function AdminDashboardPage() {
     setUpdatingId(app.id);
     setFeedbackMsg(null);
     try {
-      const { error } = await supabase
-        .from("company_applications")
-        .update({ status: newStatus })
-        .eq("id", app.id);
-
-      if (error) throw error;
+      const res = await authedPost("/api/admin/applications", { id: app.id, status: newStatus });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? "Failed to update company status");
 
       setApplications((prev) =>
         prev.map((item) => (item.id === app.id ? { ...item, status: newStatus } : item))
@@ -273,12 +266,12 @@ export default function AdminDashboardPage() {
     setUpdatingRegistrarId(reg.user_id);
     setFeedbackMsg(null);
     try {
-      const { error } = await supabase
-        .from("registrar_profiles")
-        .update({ verification_status: newStatus, updated_at: new Date().toISOString() })
-        .eq("user_id", reg.user_id);
-
-      if (error) throw error;
+      const res = await authedPost("/api/admin/registrars", {
+        userId: reg.user_id,
+        verificationStatus: newStatus,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? "Failed to update registrar KYC");
 
       setRegistrars((prev) =>
         prev.map((r) =>
@@ -310,12 +303,12 @@ export default function AdminDashboardPage() {
     setUpdatingRegistrarId(reg.user_id);
     setFeedbackMsg(null);
     try {
-      const { error } = await supabase
-        .from("registrar_profiles")
-        .update({ subscription_plan: plan, updated_at: new Date().toISOString() })
-        .eq("user_id", reg.user_id);
-
-      if (error) throw error;
+      const res = await authedPost("/api/admin/registrars", {
+        userId: reg.user_id,
+        subscriptionPlan: plan,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? "Failed to update plan");
 
       setRegistrars((prev) =>
         prev.map((r) =>
@@ -489,12 +482,24 @@ export default function AdminDashboardPage() {
             mobileMenuOpen ? "block" : "hidden"
           } lg:block p-4 border-t border-slate-800 space-y-2`}
         >
+          {adminEmail && (
+            <p className="text-[11px] text-slate-400 truncate" title={adminEmail}>
+              Signed in as {adminEmail}
+            </p>
+          )}
           <Link
             href="/"
             className="block w-full text-center py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 font-medium"
           >
             ← Back to Robin Portal
           </Link>
+          <button
+            type="button"
+            onClick={() => void handleSignOut()}
+            className="block w-full text-center py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 font-medium"
+          >
+            Sign Out
+          </button>
         </div>
       </aside>
 

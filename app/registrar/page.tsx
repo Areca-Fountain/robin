@@ -141,18 +141,13 @@ export default function RegistrarDashboardPage() {
   const loadRegistrarApplications = useCallback(async (currentUser: User) => {
     setAppsLoading(true);
     try {
-      let query = supabase
+      // Only companies THIS registrar submitted. Never match on email, or a registrar
+      // could end up seeing (or owning) a company that merely shares their address.
+      const query = supabase
         .from("company_applications")
         .select("*")
+        .or(`user_id.eq.${currentUser.id},registrar_user_id.eq.${currentUser.id}`)
         .order("created_at", { ascending: false });
-
-      if (currentUser.email) {
-        query = query.or(
-          `user_id.eq.${currentUser.id},registrar_user_id.eq.${currentUser.id},rep_email.eq.${currentUser.email}`
-        );
-      } else {
-        query = query.or(`user_id.eq.${currentUser.id},registrar_user_id.eq.${currentUser.id}`);
-      }
 
       const { data, error } = await query;
       if (error) throw error;
@@ -251,6 +246,26 @@ export default function RegistrarDashboardPage() {
     setApplications([]);
   };
 
+  // A company login email can't be the registrar's own, or belong to an admin or another registrar
+  const checkCompanyEmail = async (email: string): Promise<string | null> => {
+    const clean = email.trim().toLowerCase();
+    if (user?.email && clean === user.email.toLowerCase()) {
+      return "The company email must be different from your own registrar account email.";
+    }
+    try {
+      const res = await fetch("/api/auth/check-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: clean }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) return json.error ?? "That email can't be used for a company account.";
+    } catch {
+      return "Could not check the company email. Please try again.";
+    }
+    return null;
+  };
+
   // =========================================================================
   // 1. ADD NEW COMPANY SUBMISSION (4-STEP REGISTRAR WORKFLOW)
   // =========================================================================
@@ -298,7 +313,8 @@ export default function RegistrarDashboardPage() {
         company_email: companyEmail.trim().toLowerCase(),
         br_number: brNumber.trim(),
         rep_name: repName.trim() || profile.full_name || "Authorized Registrar",
-        rep_email: user.email || companyEmail.trim().toLowerCase(),
+        // The company's own login. The registrar is tracked by registrar_user_id, never by rep_email.
+        rep_email: companyEmail.trim().toLowerCase(),
         rep_role: repRole.trim() || "Authorized Registrar",
         rep_letter_url: authLetterUrl,
         br_document_url: brDocUrl,
@@ -400,9 +416,19 @@ export default function RegistrarDashboardPage() {
         return;
       }
 
+      const currentEmail = (editingApp.company_email || editingApp.rep_email || "").toLowerCase();
+      if (editCompanyEmail.trim().toLowerCase() !== currentEmail) {
+        const emailProblem = await checkCompanyEmail(editCompanyEmail);
+        if (emailProblem) {
+          setFeedback({ type: "error", text: emailProblem });
+          return;
+        }
+      }
+
       const { error } = await supabase
         .from("company_applications")
         .update({
+          rep_email: editCompanyEmail.trim().toLowerCase(),
           company_name: editCompanyName.trim(),
           br_number: editBrNumber.trim(),
           company_email: editCompanyEmail.trim().toLowerCase(),
