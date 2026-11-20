@@ -3,6 +3,7 @@ import {
   requireCompany,
   requireOwner,
   findApplicationByPrimaryEmail,
+  assertEmailFreeForCompany,
   errorResponse,
 } from "@/lib/auth-server";
 
@@ -63,6 +64,8 @@ export async function POST(req: Request) {
         if (await findApplicationByPrimaryEmail(email)) {
           return bad("That email is already the primary account of a company.");
         }
+        // Admin and registrar emails can never get company access
+        await assertEmailFreeForCompany(email);
 
         if (role === "secondary") {
           const { count, error } = await supabase

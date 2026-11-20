@@ -136,6 +136,18 @@ export default function RegisterCompanyPage() {
     setIsSubmitting(true);
 
     try {
+      // One account, one role: registrar and admin emails can't become company logins
+      const emailRes = await fetch("/api/auth/check-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: companyEmail }),
+      });
+      if (!emailRes.ok) {
+        const emailJson = await emailRes.json().catch(() => ({}));
+        setErrorMsg(emailJson.error ?? "That email can't be used for a company account.");
+        return;
+      }
+
       const brDocUrl = await uploadFileToSupabase(brFile, "br-docs");
       const repLetterUrl = repLetterFile
         ? await uploadFileToSupabase(repLetterFile, "letters")

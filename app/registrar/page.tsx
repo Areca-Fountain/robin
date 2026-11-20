@@ -69,8 +69,8 @@ export default function RegistrarDashboardPage() {
     null
   );
 
-  // Admin Review Lock Popup Modal State
-  const [lockPopup, setLockPopup] = useState<{ title: string; message: string } | null>(null);
+  // Admin Review Popup Modal State
+  const [reviewPopup, setReviewPopup] = useState<{ title: string; message: string } | null>(null);
 
   // Preview & Edit Modal States
   const [previewApp, setPreviewApp] = useState<CompanyApplication | null>(null);
@@ -122,37 +122,32 @@ export default function RegistrarDashboardPage() {
   // Subscription State
   const [updatingPlan, setUpdatingPlan] = useState(false);
 
-  // Helper: Upload file to Supabase Storage ("company-documents" bucket)
+  // Helper: Upload file to Supabase Storage ("company-docs" bucket)
   const uploadDocumentFile = async (file: File, folder: string): Promise<string> => {
     const ext = file.name.split(".").pop() || "pdf";
     const filePath = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
     const { error: uploadError } = await supabase.storage
-  .from("company-docs")            // was "company-documents"
-  .upload(filePath, file,);
+      .from("company-docs")
+      .upload(filePath, file);
 
-if (uploadError) throw uploadError;
+    if (uploadError) throw uploadError;
 
-const { data } = supabase.storage.from("company-docs").getPublicUrl(filePath);
-return data.publicUrl;
+    const { data } = supabase.storage.from("company-docs").getPublicUrl(filePath);
+    return data.publicUrl;
   };
 
   // Load Registrar's Submitted Companies
   const loadRegistrarApplications = useCallback(async (currentUser: User) => {
     setAppsLoading(true);
     try {
-      let query = supabase
+      // Only companies THIS registrar submitted. Never match on email, or a registrar
+      // could end up seeing (or owning) a company that merely shares their address.
+      const query = supabase
         .from("company_applications")
         .select("*")
+        .or(`user_id.eq.${currentUser.id},registrar_user_id.eq.${currentUser.id}`)
         .order("created_at", { ascending: false });
-
-      if (currentUser.email) {
-        query = query.or(
-          `user_id.eq.${currentUser.id},registrar_user_id.eq.${currentUser.id},rep_email.eq.${currentUser.email}`
-        );
-      } else {
-        query = query.or(`user_id.eq.${currentUser.id},registrar_user_id.eq.${currentUser.id}`);
-      }
 
       const { data, error } = await query;
       if (error) throw error;
@@ -251,6 +246,26 @@ return data.publicUrl;
     setApplications([]);
   };
 
+  // A company login email can't be the registrar's own, or belong to an admin or another registrar
+  const checkCompanyEmail = async (email: string): Promise<string | null> => {
+    const clean = email.trim().toLowerCase();
+    if (user?.email && clean === user.email.toLowerCase()) {
+      return "The company email must be different from your own registrar account email.";
+    }
+    try {
+      const res = await fetch("/api/auth/check-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: clean }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) return json.error ?? "That email can't be used for a company account.";
+    } catch {
+      return "Could not check the company email. Please try again.";
+    }
+    return null;
+  };
+
   // =========================================================================
   // 1. ADD NEW COMPANY SUBMISSION (4-STEP REGISTRAR WORKFLOW)
   // =========================================================================
@@ -288,7 +303,12 @@ return data.publicUrl;
     setFeedback(null);
 
     try {
-      // Upload Authorization Letter & BR Document
+      const emailProblem = await checkCompanyEmail(companyEmail);
+      if (emailProblem) {
+        setFeedback({ type: "error", text: emailProblem });
+        return;
+      }
+
       const authLetterUrl = await uploadDocumentFile(authLetterFile, "auth-letters");
       const brDocUrl = await uploadDocumentFile(brDocFile, "br-documents");
 
@@ -299,7 +319,8 @@ return data.publicUrl;
         company_email: companyEmail.trim().toLowerCase(),
         br_number: brNumber.trim(),
         rep_name: repName.trim() || profile.full_name || "Authorized Registrar",
-        rep_email: user.email || companyEmail.trim().toLowerCase(),
+        // The company's own login. The registrar is tracked by registrar_user_id, never by rep_email.
+        rep_email: companyEmail.trim().toLowerCase(),
         rep_role: repRole.trim() || "Authorized Registrar",
         rep_letter_url: authLetterUrl,
         br_document_url: brDocUrl,
@@ -312,7 +333,6 @@ return data.publicUrl;
 
       if (error) throw error;
 
-      // Reset form
       setCompanyName("");
       setBrNumber("");
       setRepRole("");
@@ -336,7 +356,7 @@ return data.publicUrl;
   };
 
   // =========================================================================
-  // 2. MANAGE SUBMISSIONS: EDIT & DELETE (WITH ADMIN REVIEW LOCK POPUP)
+  // 2. MANAGE SUBMISSIONS: EDIT & DELETE (WITH UNDER REVIEW POPUP)
   // =========================================================================
   const openEditModal = async (app: CompanyApplication) => {
     const { data: latest } = await supabase
@@ -351,19 +371,19 @@ return data.publicUrl;
     }
 
     if (currentStatus === "Under Review" || currentStatus === "Verified") {
-      setLockPopup({
-        title: "Action Locked — Under Admin Review",
+      setReviewPopup({
+        title: "Submission Under Review",
         message:
-          "This registration form is currently being checked by our admin panel, so editing or deleting this application is not permitted.",
+          "This company registration is currently under review by the Robin Admin team, so it can no longer be edited or deleted.",
       });
       return;
     }
 
     if (currentStatus === "Rejected") {
-      setLockPopup({
-        title: "Editing Disabled",
+      setReviewPopup({
+        title: "Editing Unavailable",
         message:
-          "This application has been rejected by the admin panel and cannot be edited. You can delete it and submit a fresh application.",
+          "This application has been rejected by the admin team and cannot be edited. You can delete it and submit a new application.",
       });
       return;
     }
@@ -394,17 +414,27 @@ return data.publicUrl;
       if (latest.status !== "Pending") {
         setEditingApp(null);
         if (user) await loadRegistrarApplications(user);
-        setLockPopup({
-          title: "Action Locked — Under Admin Review",
+        setReviewPopup({
+          title: "Submission Under Review",
           message:
-            "This registration form is currently being checked by our admin panel, so editing or deleting this application is not permitted.",
+            "This company registration is currently under review by the Robin Admin team, so it can no longer be edited or deleted.",
         });
         return;
+      }
+
+      const currentEmail = (editingApp.company_email || editingApp.rep_email || "").toLowerCase();
+      if (editCompanyEmail.trim().toLowerCase() !== currentEmail) {
+        const emailProblem = await checkCompanyEmail(editCompanyEmail);
+        if (emailProblem) {
+          setFeedback({ type: "error", text: emailProblem });
+          return;
+        }
       }
 
       const { error } = await supabase
         .from("company_applications")
         .update({
+          rep_email: editCompanyEmail.trim().toLowerCase(),
           company_name: editCompanyName.trim(),
           br_number: editBrNumber.trim(),
           company_email: editCompanyEmail.trim().toLowerCase(),
@@ -440,10 +470,10 @@ return data.publicUrl;
     }
 
     if (currentStatus === "Under Review" || currentStatus === "Verified") {
-      setLockPopup({
-        title: "Action Locked — Under Admin Review",
+      setReviewPopup({
+        title: "Submission Under Review",
         message:
-          "This registration form is currently being checked by our admin panel, so editing or deleting this application is not permitted.",
+          "This company registration is currently under review by the Robin Admin team, so it can no longer be edited or deleted.",
       });
       return;
     }
@@ -552,16 +582,13 @@ return data.publicUrl;
     setDeletingAccount(true);
     setFeedback(null);
     try {
-      // 1. Detach registrar user_id from submitted companies so all companies remain safely in Robin
       await supabase
         .from("company_applications")
         .update({ user_id: null, registrar_user_id: null })
         .or(`user_id.eq.${user.id},registrar_user_id.eq.${user.id}`);
 
-      // 2. Remove registrar profile record
       await supabase.from("registrar_profiles").delete().eq("user_id", user.id);
 
-      // 3. Sign out user session
       await supabase.auth.signOut();
       setUser(null);
       setApplications([]);
@@ -695,7 +722,7 @@ return data.publicUrl;
       case "Under Review":
         return (
           <Badge className="bg-indigo-100 text-indigo-800 border-indigo-300 hover:bg-indigo-100">
-            Under Review (Locked)
+            Under Review
           </Badge>
         );
       case "Rejected":
@@ -1020,7 +1047,7 @@ return data.publicUrl;
                               <Button
                                 size="sm"
                                 variant="secondary"
-                                className={!canEdit ? "opacity-50 cursor-not-allowed" : ""}
+                                className={!canEdit ? "opacity-50" : ""}
                                 onClick={() => openEditModal(app)}
                               >
                                 Edit
@@ -1029,7 +1056,7 @@ return data.publicUrl;
                                 size="sm"
                                 variant="destructive"
                                 disabled={deletingId === app.id}
-                                className={!canDelete ? "opacity-50 cursor-not-allowed" : ""}
+                                className={!canDelete ? "opacity-50" : ""}
                                 onClick={() => handleDeleteSubmission(app)}
                               >
                                 {deletingId === app.id ? "..." : "Delete"}
@@ -1191,7 +1218,6 @@ return data.publicUrl;
         {/* ===================================================================== */}
         {activeSection === "profile-settings" && (
           <div className="space-y-6 max-w-2xl">
-            {/* Private Details */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Registrar Private Information</CardTitle>
@@ -1249,7 +1275,6 @@ return data.publicUrl;
               </CardContent>
             </Card>
 
-            {/* Change Password */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Change Password</CardTitle>
@@ -1290,7 +1315,6 @@ return data.publicUrl;
               </CardContent>
             </Card>
 
-            {/* Delete Account (Preserves already added companies) */}
             <Card className="border-red-200">
               <CardHeader>
                 <CardTitle className="text-lg text-red-700">Delete Registrar Account</CardTitle>
@@ -1355,7 +1379,6 @@ return data.publicUrl;
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmitProfileVerification} className="space-y-5">
-                {/* Registrar Type Switch */}
                 <div className="space-y-2">
                   <Label>Registrar Account Category *</Label>
                   <div className="grid grid-cols-2 gap-3">
@@ -1381,7 +1404,6 @@ return data.publicUrl;
                   </div>
                 </div>
 
-                {/* NIC or BR Number */}
                 <div className="space-y-1.5">
                   <Label htmlFor="nicBrNum">
                     {profile.registrar_type === "Individual"
@@ -1403,7 +1425,6 @@ return data.publicUrl;
                   />
                 </div>
 
-                {/* Upload NIC or BR Scan */}
                 <div className="space-y-1.5">
                   <Label htmlFor="kycUpload">
                     Upload{" "}
@@ -1465,7 +1486,6 @@ return data.publicUrl;
             </Card>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl">
-              {/* Free Plan */}
               <Card
                 className={
                   profile.subscription_plan === "Free"
@@ -1503,7 +1523,6 @@ return data.publicUrl;
                 </CardContent>
               </Card>
 
-              {/* Premium Plan */}
               <Card
                 className={
                   profile.subscription_plan === "Premium"
@@ -1548,26 +1567,26 @@ return data.publicUrl;
         )}
       </main>
 
-      {/* Admin Review Lock Popup Modal */}
-      {lockPopup && (
+      {/* Under Review Popup Modal */}
+      {reviewPopup && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-amber-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-indigo-200">
             <div className="flex items-start gap-3">
-              <div className="h-10 w-10 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold shrink-0">
-                !
+              <div className="h-10 w-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold shrink-0">
+                i
               </div>
               <div>
-                <h3 className="text-lg font-bold text-slate-900">{lockPopup.title}</h3>
-                <p className="text-sm text-slate-600 mt-1 leading-relaxed">{lockPopup.message}</p>
+                <h3 className="text-lg font-bold text-slate-900">{reviewPopup.title}</h3>
+                <p className="text-sm text-slate-600 mt-1 leading-relaxed">{reviewPopup.message}</p>
               </div>
             </div>
             <div className="flex justify-end pt-2">
               <Button
                 type="button"
                 className="bg-indigo-600 hover:bg-indigo-700 text-white"
-                onClick={() => setLockPopup(null)}
+                onClick={() => setReviewPopup(null)}
               >
-                Understood
+                OK
               </Button>
             </div>
           </div>

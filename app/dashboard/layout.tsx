@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import RoleGate from "@/components/auth/RoleGate";
 import CompanyProvider, { useCompany } from "@/components/dashboard/CompanyProvider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ const NAV = [
   { href: "/dashboard/team", label: "Assign Team", owner: true },
   { href: "/dashboard/verification", label: "Account Verification", owner: false },
   { href: "/dashboard/settings", label: "Account Settings", owner: true },
+  { href: "/dashboard/revoke", label: "Revoke Letter", owner: false },
 ];
 
 function Shell({ children }: { children: ReactNode }) {
@@ -93,9 +95,12 @@ function Shell({ children }: { children: ReactNode }) {
 }
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
+  // Company accounts only (primary, secondary and team). Registrars and admins are turned away.
   return (
-    <CompanyProvider>
-      <Shell>{children}</Shell>
-    </CompanyProvider>
+    <RoleGate role="company">
+      <CompanyProvider>
+        <Shell>{children}</Shell>
+      </CompanyProvider>
+    </RoleGate>
   );
 }
