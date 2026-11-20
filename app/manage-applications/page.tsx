@@ -114,7 +114,7 @@ export default function AdminDashboardPage() {
     }
   }, []);
 
-  // Initial fetch on mount (all setState calls happen asynchronously inside .then)
+  // Initial fetch on mount
   useEffect(() => {
     let isMounted = true;
 
@@ -146,7 +146,7 @@ export default function AdminDashboardPage() {
     };
   }, []);
 
-  // Automatically lock Pending company submission to "Under Review" when Admin inspects/downloads
+  // Transition Pending company submission to "Under Review" when Admin previews/downloads
   const markAsUnderReviewIfPending = async (
     app: CompanyApplication
   ): Promise<CompanyApplication> => {
@@ -165,6 +165,11 @@ export default function AdminDashboardPage() {
           prev.map((item) => (item.id === app.id ? updatedApp : item))
         );
         return updatedApp;
+      } else {
+        setFeedbackMsg({
+          type: "error",
+          text: `Could not update status to Under Review: ${error.message}`,
+        });
       }
     } catch (err) {
       console.error("Failed to transition to Under Review:", err);
@@ -687,8 +692,8 @@ export default function AdminDashboardPage() {
                   Company Applications ({filteredApps.length})
                 </CardTitle>
                 <CardDescription>
-                  Previewing or downloading documents locks the submission as{" "}
-                  <strong>Under Review</strong> so the registrar cannot alter it during admin verification.
+                  Previewing or downloading documents moves the submission to{" "}
+                  <strong>Under Review</strong> while the admin team verifies the documents.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -897,7 +902,6 @@ export default function AdminDashboardPage() {
         {/* ===================================================================== */}
         {activeSection === "manage-users" && (
           <div className="space-y-6">
-            {/* Registrars & Subscription Plans */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">
@@ -986,7 +990,6 @@ export default function AdminDashboardPage() {
               </CardContent>
             </Card>
 
-            {/* Registered Companies Directory */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">
