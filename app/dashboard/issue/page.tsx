@@ -15,7 +15,6 @@ import { generateLetterPdf } from "@/lib/letter-pdf";
 import { formatDateOnly, renderTemplate, todayIso } from "@/lib/letter-format";
 import { walletKey } from "@/lib/wallet-key";
 
-const METADATA_LABEL = 7283;
 const POLL_INTERVAL_MS = 5000;
 const POLL_MAX_TRIES = 36;
 
@@ -301,18 +300,12 @@ export default function IssueLetterPage() {
 
       setStep("sign");
       // Always acquire a fresh CIP-30 wallet handle so an idle extension channel never fails
-      const { wallet, address: changeAddress } = await getFreshLaceWallet();
-      const { Transaction } = await import("@meshsdk/core");
+            const { wallet } = await getFreshLaceWallet();
+      const { issueLetterOnChain } = await import("@/lib/letter-tx");
 
-      const tx = new Transaction({ initiator: wallet });
-      tx.sendLovelace(changeAddress, "2000000");
-      tx.setMetadata(METADATA_LABEL, { hash: letterHash, v: 1 });
-
-      const unsignedTx = await tx.build();
-      const signedTx = await wallet.signTx(unsignedTx);
-
-      setStep("submit");
-      const txHash = await wallet.submitTx(signedTx);
+      // Locks 2 ADA in the Robin contract (datum = letter hash + issuer key) and
+      // keeps the hash in the transaction metadata. Lace asks for approval here.
+      const { txHash } = await issueLetterOnChain(wallet, letterHash);
 
       await confirmOnServer({
         letterId,
@@ -589,8 +582,9 @@ export default function IssueLetterPage() {
                   </Button>
                 )}
                 <p className="text-xs text-slate-500">
-                  Lace will ask you to approve one small transaction (about 2 test ADA that returns
-                  to your wallet, plus a network fee of under 0.3 ADA).
+                  Lace will ask you to approve one small transaction (about 2 test ADA that stays
+                  locked in the Robin contract and comes back if you revoke the letter, plus a
+                  network fee of under 0.3 ADA).
                 </p>
               </CardContent>
             </Card>

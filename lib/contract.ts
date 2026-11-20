@@ -14,13 +14,30 @@ if (!validator) {
   );
 }
 
-/** The compiled script, ready to attach to a Mesh transaction. */
+/** Wraps a hex string as a CBOR byte string (adds the length header). */
+function cborWrapBytes(hex: string): string {
+  const len = hex.length / 2;
+  let header: string;
+  if (len < 24) header = (0x40 + len).toString(16).padStart(2, "0");
+  else if (len < 256) header = "58" + len.toString(16).padStart(2, "0");
+  else if (len < 65536) header = "59" + len.toString(16).padStart(4, "0");
+  else throw new Error("Script is too large to encode.");
+  return header + hex;
+}
+
+/**
+ * Aiken's `compiledCode` is CBOR-wrapped ONCE. MeshJS removes one wrapper layer
+ * before hashing / attaching the script, so it needs the code wrapped TWICE.
+ * Without this, Mesh hashes the wrong bytes: the letter gets locked at an address
+ * that no valid script matches (so it can never be revoked), and spending fails
+ * with "MalformedScriptWitnesses".
+ */
 export const letterScript = {
-  code: validator.compiledCode,
+  code: cborWrapBytes(validator.compiledCode),
   version: "V3" as const,
 };
 
-/** Script hash (hex). */
+/** Script hash (hex), as computed by Aiken. */
 export const letterScriptHash: string = validator.hash;
 
 /** Address of the registry on Preprod (network id 0). Issued letters live here. */

@@ -3,6 +3,7 @@ import { getLetterOnChain } from "@/lib/cardano";
 import { requireCompany, errorResponse } from "@/lib/auth-server";
 import { walletKey } from "@/lib/wallet-key";
 import { isValidHash } from "@/lib/hash";
+import { getLetterScriptState } from "@/lib/letter-chain";
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -119,6 +120,14 @@ export async function POST(req: Request) {
       return bad(
         "This transaction was not paid by your company's registered wallet. Connect the wallet you registered with.",
         403
+      );
+    }
+        // 5b. The letter must be registered in the Robin contract
+    const scriptState = await getLetterScriptState(txHash);
+    if (!scriptState) {
+      return bad(
+        "This transaction did not register the letter in the Robin contract.",
+        400
       );
     }
 

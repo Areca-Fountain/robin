@@ -1,7 +1,7 @@
 // CLIENT-SIDE: builds, signs (Lace) and submits the issue / revoke transactions.
 // Import this from "use client" components. It never needs your Blockfrost key.
 
-import { BrowserWallet, MeshTxBuilder } from "@meshsdk/core";
+import { BlockfrostProvider, BrowserWallet, MeshTxBuilder } from "@meshsdk/core";
 import {
   REVOKE_REDEEMER,
   buildLetterDatum,
@@ -21,6 +21,14 @@ export interface ScriptUtxoRef {
   txHash: string;
   outputIndex: number;
   amount: { unit: string; quantity: string }[];
+}
+
+function getProvider() {
+  const key = process.env.NEXT_PUBLIC_BLOCKFROST_KEY;
+  if (!key) {
+    throw new Error("Missing NEXT_PUBLIC_BLOCKFROST_KEY in .env.local (restart npm run dev).");
+  }
+  return new BlockfrostProvider(key);
 }
 
 /**
@@ -88,7 +96,7 @@ export async function revokeLetterOnChain(
     );
   }
 
-  const txBuilder = new MeshTxBuilder();
+    const txBuilder = new MeshTxBuilder({ fetcher: getProvider() });
   txBuilder.setNetwork("preprod");
 
   const unsignedTx = await txBuilder
@@ -108,6 +116,7 @@ export async function revokeLetterOnChain(
     .selectUtxosFrom(utxos)
     .complete();
 
-  const signedTx = await wallet.signTx(unsignedTx);
+    // true = partial sign: the script input has no key, Lace signs only the parts it can
+  const signedTx = await wallet.signTx(unsignedTx, true);
   return wallet.submitTx(signedTx);
 }
