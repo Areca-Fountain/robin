@@ -1,3 +1,4 @@
+import { getLetterScriptState } from "@/lib/letter-chain";
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getLetterOnChain } from "@/lib/cardano";
@@ -136,8 +137,19 @@ export async function POST(req: Request) {
       });
     }
 
-    // 6. Revoked?
-    if (row.revoked) {
+    // 6. Registry contract: the letter must be locked at the Robin script,
+    //    and if that UTxO has been spent, the issuer revoked it on-chain.
+    const scriptState = await getLetterScriptState(txHash);
+    if (!scriptState) {
+      return reply({
+        status: "tampered",
+        message:
+          "This letter was not registered in the Robin contract, so it cannot be trusted.",
+        letter,
+        txHash,
+      });
+    }
+    if (scriptState.spentBy || row.revoked) {
       return reply({
         status: "revoked",
         message: `${letter.companyName} has revoked this letter. It is no longer valid.`,

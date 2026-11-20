@@ -303,12 +303,6 @@ export default function RegistrarDashboardPage() {
     setFeedback(null);
 
     try {
-      const emailProblem = await checkCompanyEmail(companyEmail);
-      if (emailProblem) {
-        setFeedback({ type: "error", text: emailProblem });
-        return;
-      }
-
       const authLetterUrl = await uploadDocumentFile(authLetterFile, "auth-letters");
       const brDocUrl = await uploadDocumentFile(brDocFile, "br-documents");
 

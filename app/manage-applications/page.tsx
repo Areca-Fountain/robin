@@ -141,11 +141,6 @@ export default function AdminDashboardPage() {
     };
   }, [loadAdminData]);
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    window.location.href = "/";
-  };
-
   // Transition Pending company submission to "Under Review" when Admin previews/downloads
   const markAsUnderReviewIfPending = async (
     app: CompanyApplication
@@ -166,10 +161,10 @@ export default function AdminDashboardPage() {
           prev.map((item) => (item.id === app.id ? updatedApp : item))
         );
         return updatedApp;
-      } else if (res.status !== 409) {
+      } else {
         setFeedbackMsg({
           type: "error",
-          text: `Could not update status to Under Review: ${json.error ?? "unknown error"}`,
+          text: `Could not update status to Under Review: ${error.message}`,
         });
       }
     } catch (err) {
