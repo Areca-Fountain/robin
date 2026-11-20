@@ -67,11 +67,23 @@ export async function POST(req: Request) {
       );
     }
 
+    // Is the issuing company verified by Robin's team?
+    let companyVerified = false;
+    if (row.company_id) {
+      const { data: company } = await supabase
+        .from("company_applications")
+        .select("status")
+        .eq("id", row.company_id)
+        .maybeSingle();
+      companyVerified = company?.status === "Verified";
+    }
+
     const letter = {
       companyName: row.company_name as string,
       employeeName: row.employee_name as string,
       position: row.position as string | null,
       issuedAt: row.issued_at as string,
+      companyVerified,
     };
     const txHash = row.tx_hash as string;
 
@@ -137,7 +149,9 @@ export async function POST(req: Request) {
     // 7. All checks passed
     return reply({
       status: "valid",
-      message: `This letter was issued by ${letter.companyName} and recorded on Cardano.`,
+      message: companyVerified
+        ? `This letter was issued by ${letter.companyName}, a verified company, and recorded on Cardano.`
+        : `This letter was recorded on Cardano by ${letter.companyName}, but Robin has not verified this company yet. Treat it with care.`,
       letter,
       txHash,
     });
