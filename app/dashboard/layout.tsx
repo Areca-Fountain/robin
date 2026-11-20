@@ -14,6 +14,7 @@ const NAV = [
   { href: "/dashboard/team", label: "Assign Team", owner: true },
   { href: "/dashboard/verification", label: "Account Verification", owner: false },
   { href: "/dashboard/settings", label: "Account Settings", owner: true },
+  { href: "/dashboard/revoke", label: "Revoke Letter", owner: false },
 ];
 
 function Shell({ children }: { children: ReactNode }) {
