@@ -21,7 +21,7 @@ export default function HomePage() {
                 Register Company
               </Button>
             </Link>
-            <Link href="/company">
+            <Link href="/dashboard">
               <Button variant="ghost" size="sm">
                 Company Dashboard
               </Button>
