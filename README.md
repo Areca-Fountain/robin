@@ -42,7 +42,7 @@ Anyone can then verify the letter. Robin checks the blockchain, not just its own
 **Where blockchain adds value**
 
 - **Nobody can quietly alter a letter**, including Robin. The fingerprint on Cardano is permanent.
-- **Anyone can check it without trusting Robin's database**: the hash, the issuing wallet and the revocation state are all read from the chain.
+- **Verification re-reads the chain, not just Robin's database.** The verifier confirms the hash in the transaction metadata, that the letter is locked at the Robin contract, and whether that lock has been spent (revoked).
 - **Revocation is public and cannot be hidden.** Only the issuing company's key can revoke, and the contract enforces this.
 - **Privacy by design.** The PDF is hashed in the user's browser. Only the hash is sent to the server; the file never leaves the device.
 
@@ -90,12 +90,12 @@ Bulk issuing writes many letters in one transaction:
 | 2 | An uploaded PDF's hash matches the issued letter | `tampered` |
 | 3 | The Cardano transaction exists | `not_found` |
 | 4 | The hash on-chain equals the stored hash | `tampered` |
-| 5 | The transaction was paid from the company's registered wallet | `tampered` |
+| 5 | The transaction was paid by the wallet recorded when the letter was issued | `tampered` |
 | 6 | The letter is locked at the Robin contract | `tampered` |
 | 7 | The contract UTxO has not been spent (not revoked) | `revoked` |
 | 8 | All checks passed | `valid` |
 
-A `valid` result also shows whether Robin has **verified the issuing company**. Letters from unverified companies can be valid on-chain but are shown with a warning.
+The issue API only accepts a letter when the connected wallet matches the company's registered wallet, so step 5 ties each letter to that wallet. A `valid` result also shows whether Robin has **verified the issuing company**. Letters from unverified companies can be valid on-chain but are shown with a warning.
 
 ---
 
@@ -118,7 +118,7 @@ A `valid` result also shows whether Robin has **verified the issuing company**. 
 - Google sign-in
 - Submit companies with an authorization letter, the company's Gmail and its BR
 - Profile verification with NIC (individuals) or BR (businesses)
-- Free plan limit of 5 submissions; Premium for unlimited
+- Free plan limit of 5 submissions; Premium for unlimited (payment is not implemented yet)
 
 ### Robin admins
 - Review company applications and registrar verification
@@ -127,6 +127,17 @@ A `valid` result also shows whether Robin has **verified the issuing company**. 
 
 ### Accounts
 One Google account has exactly one role: admin, company, or registrar. Each role has its own portal.
+
+---
+
+## Document privacy
+
+Business registration (BR/ROC), NIC and authorization documents are personal and business data, so they are never public.
+
+- All documents live in one **private** Supabase bucket. There are no public links.
+- Uploads go through `POST /api/documents/upload`. It limits files to 4 MB, accepts only PDF, PNG and JPG, and checks the file's real contents rather than its name. Anonymous uploads (company self-registration) are rate limited.
+- Admins see documents through **signed links** that expire after 1 hour. A registrar can only open their own documents, through links that expire after 2 minutes (`POST /api/documents/sign`).
+- The database stores a storage path, not a URL. Older rows that hold public URLs are still readable through the server.
 
 ---
 
@@ -185,7 +196,7 @@ Never commit `.env.local`, and never expose the service-role key to client code.
 ### Supabase setup
 
 - **Tables:** `company_applications`, `company_members`, `registrar_profiles`, `letters`, `letter_formats`
-- **Storage buckets:** `company-documents` and `company-docs` (both are currently used, see Known issues)
+- **Storage bucket:** one **private** bucket, `company-documents` (4 MB limit; PDF, PNG and JPG only). Nothing is public. See [Document privacy](#document-privacy).
 - **Auth:** Google provider enabled; add your app URL to the allowed redirect URLs
 
 The `letters` table needs at least: `id` (uuid), `company_id`, `company_name`, `employee_name`, `position`, `issued_at`, `letter_hash`, `tx_hash`, `issuer_address`, `revoked`.
@@ -225,7 +236,7 @@ app/
     issue/  formats/  revoke/  team/  settings/  verification/
   api/                      Server routes
     verify/  issue/  formats/  team/  letters/utxo/
-    company/wallet/  dashboard/me/  auth/  admin/
+    company/wallet/  documents/(upload, sign)  dashboard/me/  auth/  admin/
 components/
   auth/                     Role gate and account hook
   dashboard/                Bulk issue, wallet setup, company provider
@@ -244,6 +255,9 @@ lib/
   wallet-key.ts             Matches wallet addresses by stake key
   supabase.ts               Browser Supabase client
   supabase-admin.ts         Server-only Supabase client
+  documents-server.ts       Private document storage and signed links (server)
+  documents-client.ts       Upload and open documents through the API (browser)
+  wallet-status.ts          Real wallet vs. "pending" placeholder
 contracts/
   validators/letter_registry.ak   On-chain registry and revocation
   plutus.json                     Compiled contract
@@ -262,8 +276,11 @@ contracts/
 
 ## Known issues
 
-- Registrar uploads go to the `company-docs` bucket while company registration uses `company-documents`. Create both, or unify them.
 - Everything runs on the **Cardano Preprod testnet** only. No real funds are involved.
+- The older `company-docs` bucket is only read for legacy rows. Keep it private too.
+- Some registrar and company-registration writes (profile, plan, application status) still go from the browser straight to Supabase, so they depend on your Row Level Security rules. Moving them to server routes is planned.
+- Premium is a plan switch only. There is no payment yet.
+- Anonymous upload rate limiting is in memory, so it resets on serverless hosting.
 
 ---
 
