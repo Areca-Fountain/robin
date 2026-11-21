@@ -32,7 +32,7 @@ function getProvider() {
 }
 
 /**
- * Issue a letter: locks 2 ADA at the registry script with datum { letter_hash, issuer }
+ * Issue a single letter: locks 2 ADA at the registry script with datum { letter_hash, issuer }
  * and also writes the hash to transaction metadata (label 7283).
  * Returns the transaction hash. Save it as letters.tx_hash in Supabase.
  */
@@ -59,6 +59,59 @@ export async function issueLetterOnChain(
     ])
     .txOutInlineDatumValue(buildLetterDatum(letterHash.toLowerCase(), issuerAddress))
     .metadataValue(METADATA_LABEL, { hash: letterHash.toLowerCase(), v: 1 })
+    .changeAddress(issuerAddress)
+    .selectUtxosFrom(utxos)
+    .complete();
+
+  const signedTx = await wallet.signTx(unsignedTx);
+  const txHash = await wallet.submitTx(signedTx);
+  return { txHash, issuerAddress };
+}
+
+/**
+ * Issue multiple letters in a SINGLE Cardano transaction (only ONE Lace wallet prompt).
+ * Locks 2 ADA per letter at the registry script with each letter's datum, and writes
+ * all hashes into transaction metadata (label 7283).
+ */
+export async function issueBulkLettersOnChain(
+  wallet: BrowserWallet,
+  letterHashes: string[]
+): Promise<{ txHash: string; issuerAddress: string }> {
+  if (letterHashes.length === 0) {
+    throw new Error("No letters provided to issue.");
+  }
+
+  const normalizedHashes = letterHashes.map((h) => h.trim().toLowerCase());
+  for (const h of normalizedHashes) {
+    if (!isValidHash(h)) {
+      throw new Error("Every letterHash must be a 64-character SHA-256 hex string.");
+    }
+  }
+
+  const utxos = await wallet.getUtxos();
+  if (!utxos.length) {
+    throw new Error("This wallet has no funds. Get test ADA from the Preprod faucet.");
+  }
+  const issuerAddress = await wallet.getChangeAddress();
+  const scriptAddress = getLetterScriptAddress();
+
+  const txBuilder = new MeshTxBuilder();
+  txBuilder.setNetwork("preprod");
+
+  for (const hash of normalizedHashes) {
+    txBuilder
+      .txOut(scriptAddress, [
+        { unit: "lovelace", quantity: LETTER_LOCK_LOVELACE },
+      ])
+      .txOutInlineDatumValue(buildLetterDatum(hash, issuerAddress));
+  }
+
+  // Note: Cardano tx metadata strings must be <= 64 bytes; each 64-char hex hash is exactly 64 bytes.
+  const unsignedTx = await txBuilder
+    .metadataValue(METADATA_LABEL, {
+      hashes: normalizedHashes,
+      v: 2,
+    })
     .changeAddress(issuerAddress)
     .selectUtxosFrom(utxos)
     .complete();
@@ -96,7 +149,7 @@ export async function revokeLetterOnChain(
     );
   }
 
-    const txBuilder = new MeshTxBuilder({ fetcher: getProvider() });
+  const txBuilder = new MeshTxBuilder({ fetcher: getProvider() });
   txBuilder.setNetwork("preprod");
 
   const unsignedTx = await txBuilder
@@ -116,7 +169,7 @@ export async function revokeLetterOnChain(
     .selectUtxosFrom(utxos)
     .complete();
 
-    // true = partial sign: the script input has no key, Lace signs only the parts it can
+  // true = partial sign: the script input has no key, Lace signs only the parts it can
   const signedTx = await wallet.signTx(unsignedTx, true);
   return wallet.submitTx(signedTx);
 }

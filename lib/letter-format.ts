@@ -23,7 +23,7 @@ export const STARTER_BODY = `This is to certify that {{employee_name}} (NIC: {{n
 
 This letter is issued on {{issue_date}} at the request of the employee.`;
 
-const TOKEN_SOURCE = "\\{\\{\\s*([a-zA-Z_]+)\\s*\\}\\}";
+const TOKEN_SOURCE = "\\{\\{\\s*([a-zA-Z0-9_]+)\\s*\\}\\}";
 
 /** Placeholders in the text that Robin does not know, e.g. {{salary}} */
 export function findUnknownPlaceholders(body: string): string[] {
@@ -79,6 +79,45 @@ export function renderTemplate(
   text = text.replace(new RegExp(TOKEN_SOURCE, "g"), (_m, key: string) => {
     return vars[key.toLowerCase() as PlaceholderKey]?.trim() ?? "";
   });
+  return text
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/ {2,}/g, " ")
+    .trim();
+}
+
+export interface ExtraCustomField {
+  key: string;   // e.g. "department"
+  label: string; // e.g. "Department"
+}
+
+/**
+ * Renders a service letter for Bulk Generation with optional extra custom fields.
+ * If an extra field key appears as {{key}} in the body, it replaces it inline;
+ * otherwise, non-empty extra fields are appended cleanly below the body.
+ */
+export function renderBulkTemplate(
+  body: string,
+  vars: Partial<Record<PlaceholderKey, string>>,
+  extraDefs: ExtraCustomField[],
+  extraValues: Record<string, string>
+): string {
+  let text = renderTemplate(body, vars);
+  const appendedLines: string[] = [];
+
+  for (const field of extraDefs) {
+    const val = (extraValues[field.key] ?? "").trim();
+    const tokenRegex = new RegExp(`\\{\\{\\s*${field.key}\\s*\\}\\}`, "gi");
+    if (tokenRegex.test(text)) {
+      text = text.replace(tokenRegex, val);
+    } else if (val) {
+      appendedLines.push(`${field.label}: ${val}`);
+    }
+  }
+
+  if (appendedLines.length > 0) {
+    text = `${text}\n\n${appendedLines.join("\n")}`;
+  }
+
   return text
     .replace(/[ \t]+\n/g, "\n")
     .replace(/ {2,}/g, " ")
