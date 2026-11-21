@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { BrowserWallet } from "@meshsdk/core";
 import { useCompany } from "@/components/dashboard/CompanyProvider";
+import { BulkIssueSection } from "@/components/dashboard/BulkIssueSection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -50,6 +51,7 @@ interface IssuedLetter {
 }
 
 type Step = "idle" | "pdf" | "sign" | "submit" | "confirm" | "done" | "timeout";
+type IssueMode = "single" | "bulk";
 
 const STEP_LABELS = [
   { key: "pdf", label: "Creating the PDF" },
@@ -68,6 +70,9 @@ function slug(text: string): string {
 export default function IssueLetterPage() {
   const { me, authFetch, refresh } = useCompany();
   const walletRef = useRef<BrowserWallet | null>(null);
+
+  // Mode Tab: Single vs Bulk
+  const [mode, setMode] = useState<IssueMode>("single");
 
   // Formats
   const [formats, setFormats] = useState<Format[]>([]);
@@ -299,12 +304,9 @@ export default function IssueLetterPage() {
       const fileName = `service-letter-${slug(employeeName)}.pdf`;
 
       setStep("sign");
-      // Always acquire a fresh CIP-30 wallet handle so an idle extension channel never fails
-            const { wallet } = await getFreshLaceWallet();
+      const { wallet } = await getFreshLaceWallet();
       const { issueLetterOnChain } = await import("@/lib/letter-tx");
 
-      // Locks 2 ADA in the Robin contract (datum = letter hash + issuer key) and
-      // keeps the hash in the transaction metadata. Lace asks for approval here.
       const { txHash } = await issueLetterOnChain(wallet, letterHash);
 
       await confirmOnServer({
@@ -358,7 +360,7 @@ export default function IssueLetterPage() {
 
   if (!me) return null;
 
-  if (step === "done" && issued) {
+  if (mode === "single" && step === "done" && issued) {
     return (
       <Card className="border-slate-200 shadow-lg">
         <CardHeader className="space-y-2 text-center">
@@ -415,12 +417,41 @@ export default function IssueLetterPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Issue Service Letter</h1>
-        <p className="mt-1 text-slate-600">
-          Choose a ready format, fill in the employee&apos;s details, and Robin creates the PDF
-          and records its fingerprint on Cardano.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Issue Service Letter</h1>
+          <p className="mt-1 text-slate-600">
+            Issue a single service letter or upload an Excel sheet to generate letters in bulk.
+          </p>
+        </div>
+
+        {/* Mode Switcher Tabs */}
+        <div className="inline-flex rounded-xl bg-slate-200/80 p-1 self-start">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setMode("single")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              mode === "single"
+                ? "bg-white text-slate-900 shadow-xs"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            Single Letter
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setMode("bulk")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              mode === "bulk"
+                ? "bg-indigo-600 text-white shadow-xs"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            Bulk Generate (Excel)
+          </button>
+        </div>
       </div>
 
       {!me.company.verified && (
@@ -442,6 +473,18 @@ export default function IssueLetterPage() {
             , create one and press <strong>Generate</strong>.
           </CardContent>
         </Card>
+      ) : mode === "bulk" ? (
+        <BulkIssueSection
+          companyName={me.company.name}
+          formats={formats}
+          walletAddress={walletAddress}
+          connecting={connecting}
+          connectError={connectError}
+          onConnectWallet={handleConnect}
+          getFreshLaceWallet={getFreshLaceWallet}
+          authFetch={authFetch}
+          onRefreshDashboard={refresh}
+        />
       ) : (
         <>
           <Card className="border-slate-200 shadow-sm">

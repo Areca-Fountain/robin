@@ -16,7 +16,7 @@ const TX_HASH_REGEX = /^[a-f0-9]{64}$/i;
  * Called by the Issue Service Letter page AFTER the transaction was sent to
  * Cardano. The server saves the letter only if:
  *   1. the person is signed in and belongs to a company (primary, secondary or team)
- *   2. the transaction exists and its metadata hash equals letterHash
+ *   2. the transaction exists and its metadata hash (or batch hashes) includes letterHash
  *   3. the wallet that paid for it is the wallet this company registered
  *
  * Unverified companies CAN issue letters. People who scan them will see
@@ -105,8 +105,8 @@ export async function POST(req: Request) {
       );
     }
 
-    // 4. The hash written on-chain must be the hash of this letter
-    if (onChain.hash !== letterHash) {
+    // 4. The hash written on-chain (single or batch) must include the hash of this letter
+    if (!onChain.hashes.includes(letterHash)) {
       return bad("The hash on the blockchain does not match this letter.", 400);
     }
 
@@ -122,7 +122,8 @@ export async function POST(req: Request) {
         403
       );
     }
-        // 5b. The letter must be registered in the Robin contract
+
+    // 5b. The letter must be registered in the Robin contract
     const scriptState = await getLetterScriptState(txHash);
     if (!scriptState) {
       return bad(

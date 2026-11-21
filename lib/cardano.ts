@@ -6,15 +6,18 @@ const BLOCKFROST_URL =
 
 /**
  * The transaction metadata label Robin uses.
- * Issuing a letter must write metadata like:
+ * Single letter:
  *   { "7283": { "hash": "<64-char sha256 hex>", "v": 1 } }
- * Keep this number identical in your issue flow.
+ * Bulk batch letters:
+ *   { "7283": { "hashes": ["<64-char sha256 hex>", ...], "v": 2 } }
  */
 export const METADATA_LABEL = "7283";
 
 export interface LetterOnChain {
-  /** The letter hash stored in the transaction metadata */
+  /** Primary letter hash (first hash in batch if bulk) */
   hash: string;
+  /** All letter hashes recorded in this transaction */
+  hashes: string[];
   /** Address of the wallet that paid for / signed the transaction (first input) */
   issuerAddress: string | null;
   /** Block time as a unix timestamp (seconds), null if not yet in a block */
@@ -39,7 +42,7 @@ async function blockfrost<T>(path: string): Promise<T | null> {
 
 interface TxMetadataEntry {
   label: string;
-  json_metadata: { hash?: string; v?: number } | null;
+  json_metadata: { hash?: string; hashes?: unknown; v?: number } | null;
 }
 
 interface TxInfo {
@@ -51,8 +54,8 @@ interface TxUtxos {
 }
 
 /**
- * Reads a Robin letter record from a Cardano transaction.
- * Returns null if the transaction does not exist or has no Head Lock metadata.
+ * Reads a Robin letter record (single or batch) from a Cardano transaction.
+ * Returns null if the transaction does not exist or has no Robin metadata.
  */
 export async function getLetterOnChain(
   txHash: string
@@ -66,11 +69,26 @@ export async function getLetterOnChain(
   if (!tx || !metadata) return null;
 
   const entry = metadata.find((m) => m.label === METADATA_LABEL);
-  const hash = entry?.json_metadata?.hash;
-  if (!hash) return null;
+  const meta = entry?.json_metadata;
+  if (!meta) return null;
+
+  const hashes: string[] = [];
+  if (typeof meta.hash === "string" && meta.hash.trim()) {
+    hashes.push(meta.hash.trim().toLowerCase());
+  }
+  if (Array.isArray(meta.hashes)) {
+    for (const h of meta.hashes) {
+      if (typeof h === "string" && h.trim()) {
+        hashes.push(h.trim().toLowerCase());
+      }
+    }
+  }
+
+  if (hashes.length === 0) return null;
 
   return {
-    hash: hash.toLowerCase(),
+    hash: hashes[0],
+    hashes,
     issuerAddress: utxos?.inputs?.[0]?.address ?? null,
     blockTime: tx.block_time ?? null,
   };
