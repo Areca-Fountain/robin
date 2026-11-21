@@ -1153,7 +1153,7 @@ export default function AdminDashboardPage() {
 
                 {(() => {
                   const docInfo = getActiveDocumentInfo(selectedApp);
-                  const isImage = /\.(png|jpe?g|webp|gif)$/i.test(docInfo.url);
+                  const isImage = /\.(png|jpe?g|webp|gif)$/i.test(docInfo.url.split("?")[0]);
 
                   return (
                     <div className="border rounded-xl overflow-hidden bg-slate-100 min-h-[380px] flex items-center justify-center">
@@ -1243,7 +1243,7 @@ export default function AdminDashboardPage() {
 
             {selectedRegistrar.verification_doc_url ? (
               <div className="border rounded-xl overflow-hidden bg-slate-100 min-h-[300px] flex items-center justify-center">
-                {/\.(png|jpe?g|webp|gif)$/i.test(selectedRegistrar.verification_doc_url) ? (
+                {/\.(png|jpe?g|webp|gif)$/i.test(selectedRegistrar.verification_doc_url.split("?")[0]) ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={selectedRegistrar.verification_doc_url}

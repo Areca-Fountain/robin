@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { uploadDocument, openDocument, type UploadPurpose } from "@/lib/documents-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -122,20 +123,10 @@ export default function RegistrarDashboardPage() {
   // Subscription State
   const [updatingPlan, setUpdatingPlan] = useState(false);
 
-  // Helper: Upload file to Supabase Storage ("company-docs" bucket)
-  const uploadDocumentFile = async (file: File, folder: string): Promise<string> => {
-    const ext = file.name.split(".").pop() || "pdf";
-    const filePath = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from("company-docs")
-      .upload(filePath, file);
-
-    if (uploadError) throw uploadError;
-
-    const { data } = supabase.storage.from("company-docs").getPublicUrl(filePath);
-    return data.publicUrl;
-  };
+  // Helper: upload through our server (the storage bucket is private).
+  // Returns the storage path to save in the database.
+  const uploadDocumentFile = async (file: File, folder: string): Promise<string> =>
+    uploadDocument(file, folder as UploadPurpose);
 
   // Load Registrar's Submitted Companies
   const loadRegistrarApplications = useCallback(async (currentUser: User) => {
@@ -1434,14 +1425,13 @@ export default function RegistrarDashboardPage() {
                     onChange={(e) => setVerificationFile(e.target.files?.[0] || null)}
                   />
                   {profile.verification_doc_url && (
-                    <a
-                      href={profile.verification_doc_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      type="button"
+                      onClick={() => void openDocument(profile.verification_doc_url)}
                       className="text-xs text-indigo-600 hover:underline inline-block mt-1"
                     >
                       View currently uploaded document ↗
-                    </a>
+                    </button>
                   )}
                 </div>
 
@@ -1630,22 +1620,20 @@ export default function RegistrarDashboardPage() {
                 Submitted Documents
               </span>
               <div className="flex flex-wrap gap-3">
-                <a
-                  href={previewApp.rep_letter_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <button
+                  type="button"
+                  onClick={() => void openDocument(previewApp.rep_letter_url)}
                   className="px-3 py-2 rounded-lg border text-xs font-medium hover:bg-slate-50"
                 >
                   📄 View Authorization Letter ↗
-                </a>
-                <a
-                  href={previewApp.br_document_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void openDocument(previewApp.br_document_url)}
                   className="px-3 py-2 rounded-lg border text-xs font-medium hover:bg-slate-50"
                 >
                   📄 View Company BR ↗
-                </a>
+                </button>
               </div>
             </div>
 
