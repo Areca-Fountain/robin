@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useCompany } from "@/components/dashboard/CompanyProvider";
+import WalletSetupCard from "@/components/dashboard/WalletSetupCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -100,15 +101,7 @@ export default function DashboardSettingsPage() {
             <p className="text-slate-500">Primary email</p>
             <p className="break-all font-medium text-slate-900">{me.company.primaryEmail}</p>
           </div>
-          <div>
-            <p className="text-slate-500">Connected wallet</p>
-            <code className="block break-all rounded bg-slate-100 p-2 text-xs text-slate-700">
-              {me.company.walletAddress || "No wallet on file"}
-            </code>
-            <p className="mt-1 text-xs text-slate-500">
-              Letters must be signed with this wallet. To change it, contact Robin&apos;s team.
-            </p>
-          </div>
+          <WalletSetupCard />
         </CardContent>
       </Card>
 
