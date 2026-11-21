@@ -116,6 +116,12 @@ export default function AdminDashboardPage() {
     }
   }, [loadAdminData]);
 
+  // Sign out and return to the portal home
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    window.location.href = "/";
+  };
+
   // Initial fetch on mount
   useEffect(() => {
     let isMounted = true;
@@ -156,7 +162,10 @@ export default function AdminDashboardPage() {
       const json = await res.json().catch(() => ({}));
 
       if (res.ok) {
-        const updatedApp: CompanyApplication = { ...app, status: "Under Review" };
+        const updatedApp: CompanyApplication = {
+          ...app,
+          status: json.updated === false ? (json.status ?? app.status) : "Under Review",
+        };
         setApplications((prev) =>
           prev.map((item) => (item.id === app.id ? updatedApp : item))
         );
@@ -164,7 +173,7 @@ export default function AdminDashboardPage() {
       } else {
         setFeedbackMsg({
           type: "error",
-          text: `Could not update status to Under Review: ${error.message}`,
+          text: `Could not update status to Under Review: ${json.error ?? "Unknown error"}`,
         });
       }
     } catch (err) {
