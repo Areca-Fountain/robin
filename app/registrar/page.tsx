@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { openPayHereCheckout, type PayHerePaymentObject } from "@/lib/payhere-client";
 import { uploadDocument, openDocument, type UploadPurpose } from "@/lib/documents-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,7 +85,7 @@ export default function RegistrarDashboardPage() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Add New Company Submission Form States (4-Step Registrar Workflow)
+  // Add New Company Submission Form States
   const [companyName, setCompanyName] = useState("");
   const [brNumber, setBrNumber] = useState("");
   const [repName, setRepName] = useState("");
@@ -128,12 +129,9 @@ export default function RegistrarDashboardPage() {
   const uploadDocumentFile = async (file: File, folder: string): Promise<string> =>
     uploadDocument(file, folder as UploadPurpose);
 
-  // Load Registrar's Submitted Companies
   const loadRegistrarApplications = useCallback(async (currentUser: User) => {
     setAppsLoading(true);
     try {
-      // Only companies THIS registrar submitted. Never match on email, or a registrar
-      // could end up seeing (or owning) a company that merely shares their address.
       const query = supabase
         .from("company_applications")
         .select("*")
@@ -151,7 +149,6 @@ export default function RegistrarDashboardPage() {
     }
   }, []);
 
-  // Load Registrar Profile
   const loadRegistrarProfile = useCallback(async (currentUser: User) => {
     const fallback: RegistrarProfile = {
       user_id: currentUser.id,
@@ -184,18 +181,49 @@ export default function RegistrarDashboardPage() {
     setRepName(currentUser.user_metadata?.full_name || "");
   }, []);
 
-  // Auth Session Listener
   useEffect(() => {
     let isMounted = true;
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!isMounted) return;
       const currentUser = session?.user ?? null;
       setUser(currentUser);
       setAuthLoading(false);
       if (currentUser) {
-        loadRegistrarApplications(currentUser);
-        loadRegistrarProfile(currentUser);
+        await loadRegistrarApplications(currentUser);
+        await loadRegistrarProfile(currentUser);
+
+        // Check PayHere return URL parameters
+        const params = new URLSearchParams(window.location.search);
+        const paymentStatus = params.get("payment");
+        const orderId = params.get("order_id");
+
+        if (paymentStatus === "success" && orderId && session?.access_token) {
+          setActiveSection("manage-subscription");
+          const res = await fetch("/api/payhere/confirm-client", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ orderId, accountType: "registrar" }),
+          });
+          if (res.ok) {
+            setFeedback({
+              type: "success",
+              text: "PayHere payment confirmed! Upgraded to Premium Plan ($10/month) — Unlimited company submissions unlocked!",
+            });
+            await loadRegistrarProfile(currentUser);
+          }
+          window.history.replaceState({}, "", "/registrar");
+        } else if (paymentStatus === "cancelled") {
+          setActiveSection("manage-subscription");
+          setFeedback({
+            type: "error",
+            text: "PayHere payment was cancelled. Your account remains on the Free Plan.",
+          });
+          window.history.replaceState({}, "", "/registrar");
+        }
       }
     });
 
@@ -218,7 +246,6 @@ export default function RegistrarDashboardPage() {
     };
   }, [loadRegistrarApplications, loadRegistrarProfile]);
 
-  // Google Login
   const handleGoogleSignIn = async () => {
     setFeedback(null);
     const { error } = await supabase.auth.signInWithOAuth({
@@ -230,14 +257,12 @@ export default function RegistrarDashboardPage() {
     if (error) setFeedback({ type: "error", text: error.message });
   };
 
-  // Sign Out
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setUser(null);
     setApplications([]);
   };
 
-  // A company login email can't be the registrar's own, or belong to an admin or another registrar
   const checkCompanyEmail = async (email: string): Promise<string | null> => {
     const clean = email.trim().toLowerCase();
     if (user?.email && clean === user.email.toLowerCase()) {
@@ -257,14 +282,10 @@ export default function RegistrarDashboardPage() {
     return null;
   };
 
-  // =========================================================================
-  // 1. ADD NEW COMPANY SUBMISSION (4-STEP REGISTRAR WORKFLOW)
-  // =========================================================================
   const handleAddCompanySubmission = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
 
-    // Subscription Limit Check: Free Plan = Up to 5 submissions
     if (profile.subscription_plan === "Free" && applications.length >= 5) {
       setFeedback({
         type: "error",
@@ -304,7 +325,6 @@ export default function RegistrarDashboardPage() {
         company_email: companyEmail.trim().toLowerCase(),
         br_number: brNumber.trim(),
         rep_name: repName.trim() || profile.full_name || "Authorized Registrar",
-        // The company's own login. The registrar is tracked by registrar_user_id, never by rep_email.
         rep_email: companyEmail.trim().toLowerCase(),
         rep_role: repRole.trim() || "Authorized Registrar",
         rep_letter_url: authLetterUrl,
@@ -340,9 +360,6 @@ export default function RegistrarDashboardPage() {
     }
   };
 
-  // =========================================================================
-  // 2. MANAGE SUBMISSIONS: EDIT & DELETE (WITH UNDER REVIEW POPUP)
-  // =========================================================================
   const openEditModal = async (app: CompanyApplication) => {
     const { data: latest } = await supabase
       .from("company_applications")
@@ -483,9 +500,6 @@ export default function RegistrarDashboardPage() {
     }
   };
 
-  // =========================================================================
-  // 3. PROFILE SETTINGS (PRIVATE DETAILS, CHANGE PASSWORD, DELETE ACCOUNT)
-  // =========================================================================
   const handleSaveProfileSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
@@ -553,7 +567,6 @@ export default function RegistrarDashboardPage() {
     }
   };
 
-  // Delete Registrar Account WITHOUT removing any already added companies from the system
   const handleDeleteRegistrarAccount = async () => {
     if (!user) return;
     if (deleteConfirmText !== "DELETE") {
@@ -585,9 +598,6 @@ export default function RegistrarDashboardPage() {
     }
   };
 
-  // =========================================================================
-  // 4. PROFILE VERIFICATION (NIC FOR INDIVIDUALS / BR FOR BUSINESSES)
-  // =========================================================================
   const handleSubmitProfileVerification = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
@@ -654,44 +664,81 @@ export default function RegistrarDashboardPage() {
   };
 
   // =========================================================================
-  // 5. MANAGE SUBSCRIPTION (FREE: UP TO 5 | PREMIUM: $10/MO UNLIMITED)
+  // 5. MANAGE SUBSCRIPTION VIA PAYHERE POPUP SDK ($10/MONTH PREMIUM)
   // =========================================================================
-  const handleSwitchSubscription = async (plan: "Free" | "Premium") => {
+  const handleUpgradeViaPayHere = async () => {
     if (!user) return;
     setUpdatingPlan(true);
     setFeedback(null);
 
     try {
-      const { error } = await supabase.from("registrar_profiles").upsert(
-        {
-          user_id: user.id,
-          registrar_type: profile.registrar_type,
-          full_name: profile.full_name,
-          private_address: profile.private_address,
-          contact_number: profile.contact_number,
-          nic_or_br_number: profile.nic_or_br_number,
-          verification_doc_url: profile.verification_doc_url,
-          verification_status: profile.verification_status,
-          subscription_plan: plan,
-          subscription_status: "Active",
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id" }
-      );
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error("Session expired. Please sign in again.");
 
-      if (error) throw error;
-      setProfile((prev) => ({ ...prev, subscription_plan: plan, subscription_status: "Active" }));
-      setFeedback({
-        type: "success",
-        text:
-          plan === "Premium"
-            ? "Upgraded to Premium Plan ($10/month) — Unlimited company submissions unlocked!"
-            : "Switched to Free Plan (Up to 5 company submissions).",
+      const res = await fetch("/api/payhere/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          accountType: "registrar",
+          phone: profile.contact_number || "0770000000",
+          address: profile.private_address || "Colombo",
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error ?? "Could not start PayHere checkout.");
+      }
+
+      await openPayHereCheckout(data.payment as PayHerePaymentObject, {
+        onCompleted: async (completedOrderId) => {
+          try {
+            const confirmRes = await fetch("/api/payhere/confirm-client", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                orderId: completedOrderId,
+                accountType: "registrar",
+              }),
+            });
+            if (confirmRes.ok) {
+              setFeedback({
+                type: "success",
+                text: "PayHere payment confirmed! Upgraded to Premium Plan ($10/month) — Unlimited company submissions unlocked!",
+              });
+              await loadRegistrarProfile(user);
+            } else {
+              setFeedback({
+                type: "error",
+                text: "Payment received, but failed to update plan status.",
+              });
+            }
+          } finally {
+            setUpdatingPlan(false);
+          }
+        },
+        onDismissed: () => {
+          setUpdatingPlan(false);
+          setFeedback({
+            type: "error",
+            text: "PayHere checkout window was closed before completing payment.",
+          });
+        },
+        onError: (errMsg) => {
+          setUpdatingPlan(false);
+          setFeedback({ type: "error", text: `PayHere error: ${errMsg}` });
+        },
       });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to update subscription plan";
+      const msg = err instanceof Error ? err.message : "Failed to start PayHere payment";
       setFeedback({ type: "error", text: msg });
-    } finally {
       setUpdatingPlan(false);
     }
   };
@@ -733,7 +780,6 @@ export default function RegistrarDashboardPage() {
     );
   }
 
-  // Unauthenticated Sign-Up / Sign-In Gate (Google Login)
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
@@ -805,7 +851,6 @@ export default function RegistrarDashboardPage() {
       {/* LEFT SIDEBAR NAVIGATION */}
       <aside className="w-full lg:w-68 bg-slate-900 text-slate-100 flex flex-col justify-between shrink-0 lg:min-h-screen">
         <div>
-          {/* Brand Header */}
           <div className="p-5 border-b border-slate-800 flex items-center justify-between">
             <div>
               <Link href="/" className="text-lg font-bold tracking-tight text-white">
@@ -824,7 +869,6 @@ export default function RegistrarDashboardPage() {
             </button>
           </div>
 
-          {/* Navigation Links */}
           <nav
             className={`${
               mobileMenuOpen ? "block" : "hidden"
@@ -865,7 +909,6 @@ export default function RegistrarDashboardPage() {
           </nav>
         </div>
 
-        {/* Sidebar Footer */}
         <div
           className={`${
             mobileMenuOpen ? "block" : "hidden"
@@ -904,7 +947,6 @@ export default function RegistrarDashboardPage() {
 
       {/* MAIN WORKSPACE CONTENT */}
       <main className="flex-1 p-5 sm:p-8 max-w-6xl w-full mx-auto space-y-6">
-        {/* Top Context Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-5 rounded-2xl border shadow-2xs">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
@@ -936,7 +978,6 @@ export default function RegistrarDashboardPage() {
           </div>
         </div>
 
-        {/* Feedback Alert Banner */}
         {feedback && (
           <div
             className={`px-4 py-3 rounded-xl border text-sm ${
@@ -949,9 +990,7 @@ export default function RegistrarDashboardPage() {
           </div>
         )}
 
-        {/* ===================================================================== */}
-        {/* SECTION 1: MANAGE SUBMISSIONS                                         */}
-        {/* ===================================================================== */}
+        {/* SECTION 1: MANAGE SUBMISSIONS */}
         {activeSection === "manage-submissions" && (
           <Card>
             <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1058,9 +1097,7 @@ export default function RegistrarDashboardPage() {
           </Card>
         )}
 
-        {/* ===================================================================== */}
-        {/* SECTION 2: ADD NEW SUBMISSIONS (4-STEP WORKFLOW)                      */}
-        {/* ===================================================================== */}
+        {/* SECTION 2: ADD NEW SUBMISSIONS */}
         {activeSection === "add-submission" && (
           <Card>
             <CardHeader>
@@ -1071,7 +1108,6 @@ export default function RegistrarDashboardPage() {
             </CardHeader>
             <CardContent>
               <form onSubmit={handleAddCompanySubmission} className="space-y-6 max-w-2xl">
-                {/* Step 1: Basic Details */}
                 <div className="space-y-3">
                   <h3 className="text-sm font-semibold text-indigo-700 uppercase tracking-wider">
                     Step 1. Basic Details of the Company
@@ -1124,7 +1160,6 @@ export default function RegistrarDashboardPage() {
 
                 <Separator />
 
-                {/* Step 2: Authorization Letter */}
                 <div className="space-y-2">
                   <h3 className="text-sm font-semibold text-indigo-700 uppercase tracking-wider">
                     Step 2. Authorization Letter from the Subjective Company
@@ -1142,7 +1177,6 @@ export default function RegistrarDashboardPage() {
 
                 <Separator />
 
-                {/* Step 3: Company Gmail */}
                 <div className="space-y-2">
                   <h3 className="text-sm font-semibold text-indigo-700 uppercase tracking-wider">
                     Step 3. Company Gmail Account (For Company Dashboard Access)
@@ -1161,7 +1195,6 @@ export default function RegistrarDashboardPage() {
 
                 <Separator />
 
-                {/* Step 4: Submit Company BR */}
                 <div className="space-y-2">
                   <h3 className="text-sm font-semibold text-indigo-700 uppercase tracking-wider">
                     Step 4. Submit Company BR Document
@@ -1198,9 +1231,7 @@ export default function RegistrarDashboardPage() {
           </Card>
         )}
 
-        {/* ===================================================================== */}
-        {/* SECTION 3: PROFILE SETTINGS                                           */}
-        {/* ===================================================================== */}
+        {/* SECTION 3: PROFILE SETTINGS */}
         {activeSection === "profile-settings" && (
           <div className="space-y-6 max-w-2xl">
             <Card>
@@ -1335,9 +1366,7 @@ export default function RegistrarDashboardPage() {
           </div>
         )}
 
-        {/* ===================================================================== */}
-        {/* SECTION 4: PROFILE VERIFICATION (NIC FOR INDIVIDUALS / BR FOR BUSINESS)*/}
-        {/* ===================================================================== */}
+        {/* SECTION 4: PROFILE VERIFICATION */}
         {activeSection === "profile-verification" && (
           <Card className="max-w-2xl">
             <CardHeader>
@@ -1453,9 +1482,7 @@ export default function RegistrarDashboardPage() {
           </Card>
         )}
 
-        {/* ===================================================================== */}
-        {/* SECTION 5: MANAGE SUBSCRIPTION (FREE: UP TO 5 | PREMIUM: $10/MO)      */}
-        {/* ===================================================================== */}
+        {/* SECTION 5: MANAGE SUBSCRIPTION (PAYHERE POPUP SDK $10/MO) */}
         {activeSection === "manage-subscription" && (
           <div className="space-y-6">
             <Card>
@@ -1464,7 +1491,7 @@ export default function RegistrarDashboardPage() {
                 <CardDescription>
                   You are currently on the <strong>{profile.subscription_plan} Plan</strong> (
                   {applications.length} of{" "}
-                  {profile.subscription_plan === "Free" ? "5" : "Unlimited"} submissions used).
+                  {profile.subscription_plan === "Free" ? "5" : "Unlimited"} company registrations used).
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -1487,22 +1514,16 @@ export default function RegistrarDashboardPage() {
                   <div className="text-3xl font-bold text-slate-900 pt-2">
                     $0 <span className="text-sm font-normal text-slate-500">/ month</span>
                   </div>
-                  <CardDescription>Up to 5 company submissions</CardDescription>
+                  <CardDescription>Up to 5 company registrations</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <ul className="space-y-2 text-sm text-slate-600">
-                    <li>✓ Up to 5 company registrations</li>
+                    <li>✓ Register up to <strong>5 companies</strong></li>
                     <li>✓ Standard Admin BR &amp; Auth Letter review</li>
                     <li>✓ Automatic Company Dashboard provisioning</li>
                   </ul>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full"
-                    disabled={profile.subscription_plan === "Free" || updatingPlan}
-                    onClick={() => handleSwitchSubscription("Free")}
-                  >
-                    {profile.subscription_plan === "Free" ? "Active Plan" : "Switch to Free"}
+                  <Button type="button" variant="outline" className="w-full" disabled>
+                    {profile.subscription_plan === "Free" ? "Active Plan" : "Included"}
                   </Button>
                 </CardContent>
               </Card>
@@ -1524,11 +1545,11 @@ export default function RegistrarDashboardPage() {
                   <div className="text-3xl font-bold text-slate-900 pt-2">
                     $10 <span className="text-sm font-normal text-slate-500">/ month</span>
                   </div>
-                  <CardDescription>Unlimited company submissions</CardDescription>
+                  <CardDescription>Unlimited company registrations</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <ul className="space-y-2 text-sm text-slate-600">
-                    <li>✓ <strong>Unlimited</strong> company registrations</li>
+                    <li>✓ Register <strong>unlimited</strong> companies</li>
                     <li>✓ Priority verification queue for client companies</li>
                     <li>✓ Full registrar audit &amp; status tracking</li>
                   </ul>
@@ -1536,13 +1557,13 @@ export default function RegistrarDashboardPage() {
                     type="button"
                     className="w-full bg-indigo-600 hover:bg-indigo-700"
                     disabled={profile.subscription_plan === "Premium" || updatingPlan}
-                    onClick={() => handleSwitchSubscription("Premium")}
+                    onClick={handleUpgradeViaPayHere}
                   >
                     {profile.subscription_plan === "Premium"
-                      ? "Active Plan"
+                      ? "Active Plan ✓"
                       : updatingPlan
-                      ? "Upgrading..."
-                      : "Upgrade to Premium ($10/mo)"}
+                      ? "Opening PayHere..."
+                      : "Upgrade with PayHere ($10/mo)"}
                   </Button>
                 </CardContent>
               </Card>
@@ -1646,7 +1667,7 @@ export default function RegistrarDashboardPage() {
         </div>
       )}
 
-      {/* Edit Submission Modal (Only accessible while Pending) */}
+      {/* Edit Submission Modal */}
       {editingApp && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 space-y-5 border">

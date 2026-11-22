@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { authedPost } from "@/lib/client-auth";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,8 @@ interface CompanyApplication {
   signed_message: string;
   wallet_signature: string;
   status: "Pending" | "Under Review" | "Verified" | "Rejected" | string;
+  subscription_plan?: "Free" | "Premium" | string;
+  subscription_status?: string;
   created_at: string;
 }
 
@@ -59,6 +62,7 @@ type AdminSection =
 type DocTab = "letter" | "br" | "kyc";
 
 export default function AdminDashboardPage() {
+  const router = useRouter();
   const [activeSection, setActiveSection] = useState<AdminSection>("overview");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -119,7 +123,8 @@ export default function AdminDashboardPage() {
   // Sign out and return to the portal home
   const handleSignOut = async () => {
     await supabase.auth.signOut();
-    window.location.href = "/";
+    router.push("/");
+    router.refresh();
   };
 
   // Initial fetch on mount
@@ -253,6 +258,39 @@ export default function AdminDashboardPage() {
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to update company status";
+      setFeedbackMsg({ type: "error", text: msg });
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  // Toggle Company Subscription Plan (Admin Override - works regardless of verification status)
+  const handleCompanyPlanOverride = async (
+    app: CompanyApplication,
+    plan: "Free" | "Premium"
+  ) => {
+    setUpdatingId(app.id);
+    setFeedbackMsg(null);
+    try {
+      const res = await authedPost("/api/admin/applications", {
+        id: app.id,
+        subscriptionPlan: plan,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? "Failed to update company plan");
+
+      setApplications((prev) =>
+        prev.map((item) =>
+          item.id === app.id ? { ...item, subscription_plan: plan } : item
+        )
+      );
+
+      setFeedbackMsg({
+        type: "success",
+        text: `Updated "${app.company_name}"'s plan to ${plan}.`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to update company plan";
       setFeedbackMsg({ type: "error", text: msg });
     } finally {
       setUpdatingId(null);
@@ -638,6 +676,15 @@ export default function AdminDashboardPage() {
                                 {app.company_name}
                               </span>
                               {getStatusBadge(app.status)}
+                              <Badge
+                                className={
+                                  app.subscription_plan === "Premium"
+                                    ? "bg-indigo-100 text-indigo-800 border-indigo-300"
+                                    : "bg-slate-100 text-slate-700"
+                                }
+                              >
+                                {app.subscription_plan || "Free"}
+                              </Badge>
                             </div>
                             <p className="text-xs text-slate-500 mt-0.5">
                               BR: {app.br_number} • Company Gmail:{" "}
@@ -727,6 +774,7 @@ export default function AdminDashboardPage() {
                           <th className="py-3 px-4 font-semibold">Company &amp; BR</th>
                           <th className="py-3 px-4 font-semibold">Company Gmail / Rep</th>
                           <th className="py-3 px-4 font-semibold">Source</th>
+                          <th className="py-3 px-4 font-semibold">Plan</th>
                           <th className="py-3 px-4 font-semibold">Status</th>
                           <th className="py-3 px-4 font-semibold text-right">Actions</th>
                         </tr>
@@ -735,6 +783,7 @@ export default function AdminDashboardPage() {
                         {filteredApps.map((app) => {
                           const isRejected = app.status === "Rejected";
                           const isVerified = app.status === "Verified";
+                          const plan = app.subscription_plan || "Free";
 
                           return (
                             <tr key={app.id} className="hover:bg-slate-50/90">
@@ -760,6 +809,17 @@ export default function AdminDashboardPage() {
                                 ) : (
                                   <Badge variant="secondary">Direct Company</Badge>
                                 )}
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <Badge
+                                  className={
+                                    plan === "Premium"
+                                      ? "bg-indigo-100 text-indigo-800 border-indigo-300"
+                                      : "bg-slate-100 text-slate-700"
+                                  }
+                                >
+                                  {plan}
+                                </Badge>
                               </td>
                               <td className="py-3.5 px-4">{getStatusBadge(app.status)}</td>
                               <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
@@ -968,7 +1028,7 @@ export default function AdminDashboardPage() {
                                     : "bg-slate-100 text-slate-700"
                                 }
                               >
-                                {reg.subscription_plan}
+                                {reg.subscription_plan || "Free"}
                               </Badge>
                             </td>
                             <td className="py-3.5 px-4 text-right space-x-2">
@@ -1010,7 +1070,7 @@ export default function AdminDashboardPage() {
                   System Company Accounts ({applications.length})
                 </CardTitle>
                 <CardDescription>
-                  All companies registered directly or onboarded via third-party registrars.
+                  All companies registered directly or onboarded via third-party registrars, along with their active subscription plan.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -1022,28 +1082,62 @@ export default function AdminDashboardPage() {
                         <th className="py-3 px-4 font-semibold">Primary Login Gmail</th>
                         <th className="py-3 px-4 font-semibold">Cardano Wallet</th>
                         <th className="py-3 px-4 font-semibold">Verification</th>
+                        <th className="py-3 px-4 font-semibold">Current Plan</th>
+                        <th className="py-3 px-4 font-semibold text-right">Plan Control</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
-                      {applications.map((app) => (
-                        <tr key={app.id}>
-                          <td className="py-3 px-4">
-                            <div className="font-semibold text-slate-900">{app.company_name}</div>
-                            <div className="text-xs font-mono text-slate-500">{app.br_number}</div>
-                          </td>
-                          <td className="py-3 px-4 text-xs">
-                            {app.company_email || app.rep_email}
-                          </td>
-                          <td className="py-3 px-4">
-                            <code className="text-xs bg-slate-100 px-2 py-0.5 rounded">
-                              {app.wallet_address
-                                ? `${app.wallet_address.slice(0, 16)}...`
-                                : "Not connected"}
-                            </code>
-                          </td>
-                          <td className="py-3 px-4">{getStatusBadge(app.status)}</td>
-                        </tr>
-                      ))}
+                      {applications.map((app) => {
+                        const currentPlan = app.subscription_plan || "Free";
+                        return (
+                          <tr key={app.id}>
+                            <td className="py-3 px-4">
+                              <div className="font-semibold text-slate-900">{app.company_name}</div>
+                              <div className="text-xs font-mono text-slate-500">{app.br_number}</div>
+                            </td>
+                            <td className="py-3 px-4 text-xs">
+                              {app.company_email || app.rep_email}
+                            </td>
+                            <td className="py-3 px-4">
+                              <code className="text-xs bg-slate-100 px-2 py-0.5 rounded">
+                                {app.wallet_address
+                                  ? `${app.wallet_address.slice(0, 16)}...`
+                                  : "Not connected"}
+                              </code>
+                            </td>
+                            <td className="py-3 px-4">{getStatusBadge(app.status)}</td>
+                            <td className="py-3 px-4">
+                              <Badge
+                                className={
+                                  currentPlan === "Premium"
+                                    ? "bg-indigo-100 text-indigo-800 border-indigo-300"
+                                    : "bg-slate-100 text-slate-700"
+                                }
+                              >
+                                {currentPlan}
+                              </Badge>
+                            </td>
+                            <td className="py-3 px-4 text-right space-x-2 whitespace-nowrap">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={updatingId === app.id || currentPlan === "Free"}
+                                onClick={() => handleCompanyPlanOverride(app, "Free")}
+                              >
+                                Set Free
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                                disabled={updatingId === app.id || currentPlan === "Premium"}
+                                onClick={() => handleCompanyPlanOverride(app, "Premium")}
+                              >
+                                Set Premium
+                              </Button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1064,6 +1158,15 @@ export default function AdminDashboardPage() {
                 <div className="flex items-center gap-3">
                   <h2 className="text-xl font-bold text-slate-900">{selectedApp.company_name}</h2>
                   {getStatusBadge(selectedApp.status)}
+                  <Badge
+                    className={
+                      selectedApp.subscription_plan === "Premium"
+                        ? "bg-indigo-100 text-indigo-800 border-indigo-300"
+                        : "bg-slate-100 text-slate-700"
+                    }
+                  >
+                    {selectedApp.subscription_plan || "Free"}
+                  </Badge>
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5">
                   BR: {selectedApp.br_number} • Company Login Gmail:{" "}

@@ -71,20 +71,16 @@ export default function IssueLetterPage() {
   const { me, authFetch, refresh } = useCompany();
   const walletRef = useRef<BrowserWallet | null>(null);
 
-  // Mode Tab: Single vs Bulk
   const [mode, setMode] = useState<IssueMode>("single");
 
-  // Formats
   const [formats, setFormats] = useState<Format[]>([]);
   const [formatsLoading, setFormatsLoading] = useState(true);
   const [formatId, setFormatId] = useState("");
 
-  // Wallet
   const [connecting, setConnecting] = useState(false);
   const [walletAddress, setWalletAddress] = useState("");
   const [connectError, setConnectError] = useState("");
 
-  // Letter fields
   const [employeeName, setEmployeeName] = useState("");
   const [nic, setNic] = useState("");
   const [position, setPosition] = useState("");
@@ -92,7 +88,6 @@ export default function IssueLetterPage() {
   const [stillEmployed, setStillEmployed] = useState(false);
   const [endDate, setEndDate] = useState("");
 
-  // Progress
   const [step, setStep] = useState<Step>("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [pendingRecord, setPendingRecord] = useState<PendingRecord | null>(null);
@@ -161,7 +156,7 @@ export default function IssueLetterPage() {
     const address = await wallet.getChangeAddress();
     const connectedKey = walletKey(address);
     const registeredKey = walletKey(me.company.walletAddress);
-        if (!registeredKey) {
+    if (!registeredKey) {
       throw new Error(
         "No wallet is connected to your company yet. Open Settings, connect your Lace wallet there, then come back."
       );
@@ -267,6 +262,10 @@ export default function IssueLetterPage() {
       setErrorMsg("Choose a format first.");
       return;
     }
+    if (me.company.subscriptionPlan === "Free" && me.stats.letters >= 5) {
+      setErrorMsg("Free plan limit reached (5 service letters). Please upgrade to Premium ($10/month).");
+      return;
+    }
     if (!walletAddress) {
       setErrorMsg("Connect your company wallet first.");
       return;
@@ -365,6 +364,9 @@ export default function IssueLetterPage() {
 
   if (!me) return null;
 
+  const isFreeLimitReached =
+    me.company.subscriptionPlan === "Free" && me.stats.letters >= 5;
+
   if (mode === "single" && step === "done" && issued) {
     return (
       <Card className="border-slate-200 shadow-lg">
@@ -459,6 +461,29 @@ export default function IssueLetterPage() {
         </div>
       </div>
 
+      {/* Free Plan Limit Banner */}
+      {me.company.subscriptionPlan === "Free" && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+            isFreeLimitReached
+              ? "border-red-300 bg-red-50 text-red-900"
+              : "border-indigo-200 bg-indigo-50/70 text-indigo-950"
+          }`}
+        >
+          <div>
+            <strong>Free Plan Quota:</strong> {me.stats.letters} of 5 service letters used.
+            {isFreeLimitReached
+              ? " Upgrade to Premium ($10/month) to issue unlimited letters."
+              : " Upgrade anytime for unlimited letters."}
+          </div>
+          <Link href="/dashboard/subscription">
+            <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 shrink-0">
+              Upgrade ($10/mo)
+            </Button>
+          </Link>
+        </div>
+      )}
+
       {!me.company.verified && (
         <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           Your company is not verified yet. You can issue letters, but scanners will see
@@ -466,7 +491,23 @@ export default function IssueLetterPage() {
         </p>
       )}
 
-      {formatsLoading ? (
+      {isFreeLimitReached ? (
+        <Card className="border-red-200 bg-white shadow-sm">
+          <CardHeader>
+            <CardTitle className="text-lg text-red-800">Free Plan Limit Reached (5/5 Letters)</CardTitle>
+            <CardDescription>
+              You have issued all 5 service letters included in the Free Plan. Upgrade to the Premium Plan ($10/month) via PayHere to unlock unlimited service letters.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Link href="/dashboard/subscription">
+              <Button className="bg-indigo-600 hover:bg-indigo-700">
+                Upgrade to Premium ($10/month)
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : formatsLoading ? (
         <p className="text-sm text-slate-500">Loading formats…</p>
       ) : formats.length === 0 ? (
         <Card className="border-dashed border-slate-300">
