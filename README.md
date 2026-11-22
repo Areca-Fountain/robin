@@ -21,6 +21,7 @@ When a company issues a letter through Robin:
 1. Robin generates the PDF and takes its **SHA-256 fingerprint**.
 2. That fingerprint is **locked on Cardano** in a small transaction paid by the company's own wallet.
 3. The letter carries a **QR code** that points to a public verification page.
+3. Introduced Robin AI powered service Letter Generator
 
 Anyone can then verify the letter. Robin checks the blockchain, not just its own database, so a forged or edited letter cannot pass.
 
