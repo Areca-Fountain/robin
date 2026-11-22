@@ -1,8 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
 import { useAccount } from "@/components/auth/useAccount";
 import { Button } from "@/components/ui/button";
 
@@ -76,7 +74,6 @@ const ADMIN_CARD: PortalCard = {
 };
 
 export default function HomePage() {
-  const router = useRouter();
   const { loading, account } = useAccount();
   const role = account?.role ?? "none";
 
@@ -86,53 +83,8 @@ export default function HomePage() {
   else if (account && role === "registrar") cards = [REGISTRAR_CARD, VERIFY_CARD];
   else cards = [REGISTRAR_CARD, REGISTER_COMPANY_CARD, COMPANY_LOGIN_CARD, VERIFY_CARD];
 
-  const navLinks = cards.map((c) => ({
-    href: c.href,
-    label: c.title === "Verify Service Letter" ? "Verify Letter" : c.title,
-  }));
-
-  async function signOut() {
-    await supabase.auth.signOut();
-    router.push("/");
-    router.refresh();
-  }
-
   return (
     <main className="min-h-screen bg-slate-50 flex flex-col justify-between">
-      {/* Top Navbar */}
-      <header className="bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-4">
-          <Link href="/" className="text-xl font-bold tracking-tight text-slate-900">
-            Robin <span className="text-indigo-600">Verification</span>
-          </Link>
-          <nav className="flex flex-wrap items-center gap-2 sm:gap-3 text-sm">
-            <a href="#pricing">
-              <Button variant="ghost" size="sm">
-                Pricing
-              </Button>
-            </a>
-            {!loading &&
-              navLinks.map((link) => (
-                <Link key={link.href} href={link.href}>
-                  <Button variant="ghost" size="sm">
-                    {link.label}
-                  </Button>
-                </Link>
-              ))}
-            {account && (
-              <>
-                <span className="hidden sm:inline text-xs text-slate-500 capitalize">
-                  {account.email} · {role === "none" ? "no role yet" : role}
-                </span>
-                <Button size="sm" variant="outline" onClick={() => void signOut()}>
-                  Sign out
-                </Button>
-              </>
-            )}
-          </nav>
-        </div>
-      </header>
-
       {/* Hero & Role Cards */}
       <section className="max-w-5xl mx-auto px-6 py-14 text-center space-y-10">
         <div className="space-y-4 max-w-2xl mx-auto">
