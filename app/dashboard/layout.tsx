@@ -14,6 +14,7 @@ const NAV = [
   { href: "/dashboard/formats", label: "Manage Formats", owner: false },
   { href: "/dashboard/team", label: "Assign Team", owner: true },
   { href: "/dashboard/verification", label: "Account Verification", owner: false },
+  { href: "/dashboard/subscription", label: "Subscription & Plan", owner: true },
   { href: "/dashboard/settings", label: "Account Settings", owner: true },
   { href: "/dashboard/revoke", label: "Revoke Letter", owner: false },
 ];
@@ -53,15 +54,30 @@ function Shell({ children }: { children: ReactNode }) {
         <div className="mb-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Robin</p>
           <p className="mt-1 font-semibold text-slate-900 break-words">{me.company.name}</p>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <Badge
               className={me.company.verified ? "bg-emerald-600 text-white" : "bg-slate-500 text-white"}
             >
               {me.company.verified ? "Verified" : "Not verified"}
             </Badge>
+            <Badge
+              variant="outline"
+              className={
+                me.company.subscriptionPlan === "Premium"
+                  ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                  : "border-slate-300 text-slate-600"
+              }
+            >
+              {me.company.subscriptionPlan}
+            </Badge>
             <span className="text-xs capitalize text-slate-500">{me.role}</span>
           </div>
           <p className="mt-2 break-all text-xs text-slate-500">{me.email}</p>
+          {me.company.subscriptionPlan === "Free" && (
+            <p className="mt-2 rounded-md bg-slate-100 px-2.5 py-1.5 text-[11px] text-slate-600">
+              Free quota: <strong>{me.stats.letters} / 5</strong> letters issued
+            </p>
+          )}
         </div>
 
         <nav className="flex flex-wrap gap-1 md:flex-col">
@@ -95,7 +111,6 @@ function Shell({ children }: { children: ReactNode }) {
 }
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
-  // Company accounts only (primary, secondary and team). Registrars and admins are turned away.
   return (
     <RoleGate role="company">
       <CompanyProvider>

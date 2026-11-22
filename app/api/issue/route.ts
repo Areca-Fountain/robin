@@ -8,23 +8,8 @@ import { getLetterScriptState } from "@/lib/letter-chain";
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TX_HASH_REGEX = /^[a-f0-9]{64}$/i;
+const FREE_LETTER_LIMIT = 5;
 
-/**
- * POST /api/issue   (needs the Google login token)
- * Body: { letterId, letterHash, txHash, employeeName, position?, formatId? }
- *
- * Called by the Issue Service Letter page AFTER the transaction was sent to
- * Cardano. The server saves the letter only if:
- *   1. the person is signed in and belongs to a company (primary, secondary or team)
- *   2. the transaction exists and its metadata hash (or batch hashes) includes letterHash
- *   3. the wallet that paid for it is the wallet this company registered
- *
- * Unverified companies CAN issue letters. People who scan them will see
- * "Not verified" until Robin's team approves the company.
- *
- * While the transaction is not in a block yet it answers 202 { status: "pending" }
- * and the page asks again a few seconds later.
- */
 export async function POST(req: Request) {
   try {
     const ctx = await requireCompany(req);
@@ -71,6 +56,27 @@ export async function POST(req: Request) {
         });
       }
       return bad("A different letter is already saved with this id.", 409);
+    }
+
+    // 1b. Subscription Plan Limit Check (Free = max 5 letters, Premium = unlimited)
+    const [{ data: compSub }, { count: issuedCount }] = await Promise.all([
+      supabase
+        .from("company_applications")
+        .select("subscription_plan")
+        .eq("id", ctx.companyId)
+        .maybeSingle(),
+      supabase
+        .from("letters")
+        .select("id", { count: "exact", head: true })
+        .eq("company_id", ctx.companyId),
+    ]);
+
+    const currentPlan = compSub?.subscription_plan === "Premium" ? "Premium" : "Free";
+    if (currentPlan === "Free" && (issuedCount ?? 0) >= FREE_LETTER_LIMIT) {
+      return bad(
+        "Free plan limit reached (5 service letters). Upgrade to Premium ($10/month) for unlimited letters.",
+        403
+      );
     }
 
     // 2. The format (if any) must belong to this company

@@ -23,6 +23,10 @@ export interface Me {
     verified: boolean;
     walletAddress: string;
     primaryEmail: string;
+    subscriptionPlan: "Free" | "Premium";
+    subscriptionStatus: string;
+    freeLetterLimit: number;
+    remainingFreeLetters: number | null;
   };
   stats: {
     letters: number;
@@ -114,7 +118,15 @@ export default function CompanyProvider({ children }: { children: ReactNode }) {
   }, [authFetch, router]);
 
   useEffect(() => {
-    void refresh();
+    let active = true;
+    async function init() {
+      if (!active) return;
+      await refresh();
+    }
+    void init();
+    return () => {
+      active = false;
+    };
   }, [refresh]);
 
   return (
