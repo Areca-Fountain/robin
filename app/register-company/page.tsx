@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { uploadDocument, type UploadPurpose } from "@/lib/documents-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -100,23 +101,10 @@ export default function RegisterCompanyPage() {
     }
   };
 
-  // Upload file to Supabase Storage ("company-documents" bucket)
-  const uploadFileToSupabase = async (file: File, folder: string) => {
-    const fileExt = file.name.split(".").pop() || "pdf";
-    const fileName = `${folder}/${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
-
-    const { error } = await supabase.storage
-      .from("company-documents")
-      .upload(fileName, file, { upsert: true });
-
-    if (error) throw error;
-
-    const { data: publicUrlData } = supabase.storage
-      .from("company-documents")
-      .getPublicUrl(fileName);
-
-    return publicUrlData.publicUrl;
-  };
+  // Upload a document through our server (the storage bucket is private).
+  // Returns the storage path to save in the database.
+  const uploadFileToSupabase = async (file: File, folder: string) =>
+    uploadDocument(file, folder as UploadPurpose);
 
   // Submit Application (Works without signing in — only Lace wallet connection is needed)
   const handleSubmit = async (e: React.FormEvent) => {
