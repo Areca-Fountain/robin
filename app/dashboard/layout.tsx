@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 const NAV = [
+  { href: "/dashboard/ai", label: "Generate with Robin AI", owner: false }, 
   { href: "/dashboard", label: "Analytics", owner: false },
   { href: "/dashboard/issue", label: "Issue Service Letter", owner: false },
   { href: "/dashboard/formats", label: "Manage Formats", owner: false },
