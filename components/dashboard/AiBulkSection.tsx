@@ -13,7 +13,7 @@ import type { ReadyFormat } from "@/components/dashboard/BulkIssueSection";
 import { sha256Hex } from "@/lib/hash";
 import { generateLetterPdf } from "@/lib/letter-pdf";
 import { formatDateOnly, renderTemplate, todayIso } from "@/lib/letter-format";
-import { isAiDesignation } from "@/lib/ai-eligibility";
+import { isAiDesignation, normalizePerformance } from "@/lib/ai-eligibility";
 import {
   confirmLetterOnServer,
   friendlyChainError,
@@ -33,6 +33,8 @@ interface Row {
   startDate: string;
   endDate: string;
   stillEmployed: boolean;
+  keyDuty: string;
+  performance: string;
 }
 
 interface BuiltLetter {
@@ -127,7 +129,7 @@ export function AiBulkSection({
   }
 
   function handleDownloadTemplate() {
-    const headers = ["employee_name", "nic", "position", "start_date", "end_date", "still_employed"];
+    const headers = ["employee_name", "nic", "position", "start_date", "end_date", "still_employed", "key_duty", "performance"];
     const sample = {
       employee_name: "Kasun Perera",
       nic: "199812345678",
@@ -135,6 +137,8 @@ export function AiBulkSection({
       start_date: "2024-01-15",
       end_date: "2026-11-20",
       still_employed: "NO",
+      key_duty: "leading the recruitment team",
+      performance: "Excellent",
     };
     const sheet = XLSX.utils.json_to_sheet([sample], { header: headers });
     sheet["!cols"] = headers.map((h) => ({ wch: Math.max(h.length + 6, 18) }));
@@ -194,6 +198,8 @@ export function AiBulkSection({
           startDate,
           endDate,
           stillEmployed: still,
+          keyDuty: String(n.key_duty ?? "").trim().slice(0, 100),
+          performance: normalizePerformance(n.performance),
         };
       });
       setRows(parsed);
@@ -219,6 +225,8 @@ export function AiBulkSection({
             startDate: r.startDate,
             endDate: r.endDate,
             stillEmployed: r.stillEmployed,
+            keyDuty: r.keyDuty,
+            performance: r.performance,
           })),
         });
         const data = await res.json().catch(() => ({}));
@@ -437,7 +445,7 @@ export function AiBulkSection({
           {rows.length > 0 && (
             <p className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">
               <strong>{rows.length}</strong> employees found. Robin AI will add a sentence to <strong>{aiCount}</strong>{" "}
-              of them (manager, HR manager and supervisor designations).
+              of them. Optional columns <code>key_duty</code> and <code>performance</code> (Excellent, Very Good, Good or Satisfactory) go into that sentence. If <code>key_duty</code> is empty, the AI names a typical duty for the title.
             </p>
           )}
         </CardContent>

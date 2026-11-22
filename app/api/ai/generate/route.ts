@@ -1,7 +1,7 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCompany, errorResponse } from "@/lib/auth-server";
 import { generateAiLines, AiError, type AiLineRequest } from "@/lib/ai-letter";
-import { durationText, isAiDesignation } from "@/lib/ai-eligibility";
+import { durationText, isAiDesignation, normalizePerformance } from "@/lib/ai-eligibility";
 
 const BULK_CHUNK = 20; // rows the browser may send per request
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -27,7 +27,7 @@ function rateLimited(companyId: string): boolean {
  * POST /api/ai/generate   (needs the Google login token)
  * Body: { mode: "single" | "bulk", items: [{ position, startDate, endDate, stillEmployed }] }
  * Returns: { lines: (string | null)[] }   one entry per item, same order.
- * A line is null when the designation is not manager / HR manager / supervisor.
+ * A line is null when the AI gave nothing usable.
  */
 export async function POST(req: Request) {
   try {
@@ -59,6 +59,11 @@ export async function POST(req: Request) {
       const startDate = typeof it.startDate === "string" ? it.startDate : "";
       const endDate = typeof it.endDate === "string" ? it.endDate : "";
       const stillEmployed = it.stillEmployed === true;
+      const keyDuty = (typeof it.keyDuty === "string" ? it.keyDuty : "")
+        .replace(/[^\p{L}\p{N} .,&'/()-]/gu, "")
+        .trim()
+        .slice(0, 100);
+      const performance = normalizePerformance(it.performance);
 
       if (!position || position.length > 120) throw new AiError(`Item ${i + 1}: position is required (max 120 characters).`);
       if (!DATE_RE.test(startDate)) throw new AiError(`Item ${i + 1}: start date must be YYYY-MM-DD.`);
@@ -67,12 +72,12 @@ export async function POST(req: Request) {
       const eligible = isAiDesignation(position);
       const safeTitle = position.replace(/[^\p{L}\p{N} .,&'/()-]/gu, "").slice(0, 80);
       const duration = durationText(startDate, stillEmployed || !endDate ? null : endDate);
-      return { eligible, request: { position: safeTitle, duration, stillEmployed } satisfies AiLineRequest };
+      return { eligible, request: { position: safeTitle, duration, stillEmployed, keyDuty, performance } satisfies AiLineRequest };
     });
 
     // Same title + same duration = one AI line, so bulk uploads cost very few tokens
     const unique = new Map<string, AiLineRequest>();
-    const keyOf = (r: AiLineRequest) => `${r.position.toLowerCase()}|${r.duration}|${r.stillEmployed}`;
+    const keyOf = (r: AiLineRequest) => `${r.position.toLowerCase()}|${r.duration}|${r.stillEmployed}|${r.keyDuty.toLowerCase()}|${r.performance}`;
     for (const p of prepared) if (p.eligible) unique.set(keyOf(p.request), p.request);
 
     const lineByKey = new Map<string, string | null>();

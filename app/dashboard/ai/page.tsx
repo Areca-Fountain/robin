@@ -15,7 +15,7 @@ import { sha256Hex } from "@/lib/hash";
 import { generateLetterPdf } from "@/lib/letter-pdf";
 import { formatDateOnly, renderTemplate, todayIso } from "@/lib/letter-format";
 import { walletKey } from "@/lib/wallet-key";
-import { AI_MAX_LINE_CHARS, isAiDesignation } from "@/lib/ai-eligibility";
+import { AI_MAX_LINE_CHARS, PERFORMANCE_LEVELS, isAiDesignation } from "@/lib/ai-eligibility";
 import {
   confirmLetterOnServer,
   friendlyChainError,
@@ -62,6 +62,8 @@ export default function GenerateWithRobinAiPage() {
   const [startDate, setStartDate] = useState("");
   const [stillEmployed, setStillEmployed] = useState(false);
   const [endDate, setEndDate] = useState("");
+  const [keyDuty, setKeyDuty] = useState("");
+  const [performance, setPerformance] = useState("");
 
   const [aiLine, setAiLine] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -100,7 +102,7 @@ export default function GenerateWithRobinAiPage() {
   const format = formats.find((f) => f.id === formatId) ?? null;
 
   // The preview is only valid for the exact details it was generated for
-  const inputsKey = JSON.stringify([formatId, employeeName.trim(), nic.trim(), position.trim(), startDate, stillEmployed, stillEmployed ? "" : endDate]);
+  const inputsKey = JSON.stringify([formatId, employeeName.trim(), nic.trim(), position.trim(), startDate, stillEmployed, stillEmployed ? "" : endDate, keyDuty.trim(), performance]);
   const previewReady = generatedKey !== "" && generatedKey === inputsKey;
 
   function buildVars() {
@@ -190,7 +192,16 @@ export default function GenerateWithRobinAiPage() {
       if (isAiDesignation(position)) {
         const res = await authFetch("/api/ai/generate", {
           mode: "single",
-          items: [{ position: position.trim(), startDate, endDate: stillEmployed ? "" : endDate, stillEmployed }],
+          items: [
+            {
+              position: position.trim(),
+              startDate,
+              endDate: stillEmployed ? "" : endDate,
+              stillEmployed,
+              keyDuty: keyDuty.trim(),
+              performance,
+            },
+          ],
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error ?? "Robin AI could not write the text.");
@@ -300,6 +311,8 @@ export default function GenerateWithRobinAiPage() {
     setStartDate("");
     setEndDate("");
     setStillEmployed(false);
+    setKeyDuty("");
+    setPerformance("");
     setAiLine("");
     setGeneratedKey("");
   }
@@ -511,10 +524,34 @@ export default function GenerateWithRobinAiPage() {
                     <Label htmlFor="aiPosition">Designation / position *</Label>
                     <Input id="aiPosition" value={position} onChange={(e) => setPosition(e.target.value)} maxLength={120} placeholder="e.g. HR Manager" required />
                     <p className="text-xs text-slate-500">
-                      Robin AI adds a sentence for manager, HR manager and supervisor designations. Other designations use your
-                      format text only.
+                      Robin AI adds a short sentence about this designation to the letter.
                     </p>
                   </div>
+
+                  {willUseAi && (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="aiDuty">Key duty to highlight (optional)</Label>
+                        <Input id="aiDuty" value={keyDuty} onChange={(e) => setKeyDuty(e.target.value)} maxLength={100} placeholder="e.g. leading the recruitment team" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="aiPerf">Performance (optional)</Label>
+                        <select
+                          id="aiPerf"
+                          value={performance}
+                          onChange={(e) => setPerformance(e.target.value)}
+                          className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                        >
+                          <option value="">Do not mention</option>
+                          {PERFORMANCE_LEVELS.map((p) => (
+                            <option key={p} value={p}>
+                              {p}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-1.5">

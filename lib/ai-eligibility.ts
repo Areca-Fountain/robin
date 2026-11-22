@@ -4,15 +4,20 @@
  */
 
 /** The AI sentence is cut to this many characters so the letter stays on one A4 page */
-export const AI_MAX_LINE_CHARS = 280;
+export const AI_MAX_LINE_CHARS = 330;
 
-/**
- * Only these designations get an AI-written sentence:
- * "Manager", "HR Manager", "Assistant Manager", "Supervisor", ...
- * Change this one line if you want to add more (e.g. |director|head).
- */
+/** Performance levels the company can state for an employee */
+export const PERFORMANCE_LEVELS = ["Excellent", "Very Good", "Good", "Satisfactory"] as const;
+
+/** "very good" -> "Very Good". Returns "" if it is not one of the levels. */
+export function normalizePerformance(value: unknown): string {
+  const v = String(value ?? "").trim().toLowerCase();
+  return PERFORMANCE_LEVELS.find((p) => p.toLowerCase() === v) ?? "";
+}
+
+/** Robin AI writes a sentence for every designation that is filled in. */
 export function isAiDesignation(position: string): boolean {
-  return /\b(manager|supervisor)\b/i.test(position);
+  return position.trim().length > 0;
 }
 
 function parseDay(value: string): Date | null {
