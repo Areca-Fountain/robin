@@ -20,7 +20,8 @@ export default function MidnightDeployPage() {
     try {
       add('Connecting to Lace (Midnight Preprod)...');
       const wallet = await connectLaceMidnight();
-      add(`Connected: ${wallet.unshieldedAddress}`);
+      add(`Node: ${wallet.uris.substrateNodeUri.replace(/project_id=[^&]+/, 'project_id=***')}`);
+      
 
       const secret = randomBytes32();
       const hex = toHex(secret);
@@ -34,7 +35,11 @@ export default function MidnightDeployPage() {
       add(`Deployed. tx: ${res.txId}`);
     } catch (e) {
       add(`ERROR: ${e instanceof Error ? e.message : String(e)}`);
-      console.error(e);
+      const cause = e instanceof Error ? (e as Error & { cause?: unknown }).cause : undefined;
+      if (cause) {
+        add(`CAUSE: ${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}`);
+      }
+      console.error(e, cause);
     } finally {
       setBusy(false);
     }

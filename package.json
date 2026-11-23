@@ -22,6 +22,7 @@
     "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "^5.0.1",
     "@midnight-ntwrk/midnight-js-level-private-state-provider": "^5.0.1",
     "@midnight-ntwrk/midnight-js-types": "^5.0.1",
+    "@polkadot/api": "^16.5.4",
     "@supabase/supabase-js": "^2.119.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.5.2",
