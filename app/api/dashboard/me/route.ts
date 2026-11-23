@@ -46,10 +46,10 @@ export async function POST(req: Request) {
           .eq("role", "team"),
         supabase
           .from("letters")
-          .select("id, employee_name, position, issued_at, tx_hash")
+          .select("id, employee_name, position, work_status, revoked_at, issued_at, tx_hash")
           .eq("company_id", ctx.companyId)
           .order("issued_at", { ascending: false })
-          .limit(8),
+          .limit(250),
       ]);
 
     for (const r of [companyRow, letters, thisMonth, formats, generated, members, recent]) {
@@ -92,6 +92,8 @@ export async function POST(req: Request) {
         id: l.id as string,
         employeeName: l.employee_name as string,
         position: l.position as string | null,
+        workStatus: (l.work_status as "active" | "resigned" | null) ?? null,
+        revokedAt: (l.revoked_at as string | null) ?? null,
         issuedAt: l.issued_at as string,
         txHash: l.tx_hash as string,
       })),

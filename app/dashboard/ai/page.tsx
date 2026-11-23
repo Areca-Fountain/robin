@@ -289,6 +289,7 @@ export default function GenerateWithRobinAiPage() {
         employeeName: employeeName.trim(),
         position: position.trim(),
         formatId: format.id,
+        workStatus: stillEmployed ? "active" : "resigned",
         fileName: `service-letter-${slug(employeeName)}.pdf`,
         blobUrl,
         verifyUrl,

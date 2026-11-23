@@ -12,7 +12,7 @@ const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default function RevokeLetterPage() {
-  const { me } = useCompany();
+  const { me, authFetch, refresh } = useCompany();
   const [letterRef, setLetterRef] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -37,7 +37,11 @@ export default function RevokeLetterPage() {
       const res = await fetch(`/api/letters/utxo?letterId=${letterId}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Could not find this letter.");
-      if (data.spent) throw new Error("This letter has already been revoked.");
+      if (data.spent) {
+        await authFetch("/api/letters/mark-revoked", { letterId });
+        await refresh();
+        throw new Error("This letter has already been revoked.");
+      }
 
       // 2. Connect the company wallet
       const mesh = await import("@meshsdk/core");
@@ -65,6 +69,9 @@ export default function RevokeLetterPage() {
         outputIndex: data.outputIndex,
         amount: data.amount,
       });
+
+      await authFetch("/api/letters/mark-revoked", { letterId });
+      await refresh();
       setRevokedTx(txHash);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

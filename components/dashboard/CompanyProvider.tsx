@@ -48,6 +48,8 @@ export interface Me {
     id: string;
     employeeName: string;
     position: string | null;
+    workStatus: "active" | "resigned" | null;
+    revokedAt: string | null;
     issuedAt: string;
     txHash: string;
   }[];
