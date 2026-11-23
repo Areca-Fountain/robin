@@ -22,6 +22,8 @@ export interface LetterContent {
   issueDate: string;
   /** Full link that the QR code opens, e.g. https://robin.app/verify/<letterId> */
   verifyUrl: string;
+  /** Optional company letterhead PDF bytes (max 500KB) */
+  letterheadPdfBytes?: Uint8Array | null;
 }
 
 const PAGE_W = 595.28; // A4
@@ -56,7 +58,6 @@ function wrap(text: string, font: PDFFont, size: number, maxWidth: number): stri
   for (const word of text.split(" ")) {
     if (!word) continue;
 
-    // Word longer than a whole line: cut it by characters
     if (font.widthOfTextAtSize(word, size) > maxWidth) {
       push();
       let chunk = "";
@@ -91,26 +92,82 @@ export async function generateLetterPdf(c: LetterContent): Promise<Uint8Array> {
   const safe = makeSafe(regular);
 
   const page = pdf.addPage([PAGE_W, PAGE_H]);
+  const hasLetterhead = Boolean(c.letterheadPdfBytes && c.letterheadPdfBytes.byteLength > 0);
   let y = PAGE_H - MARGIN;
 
   const company = safe(c.companyName);
 
-  // ---- Header -------------------------------------------------------------
-  const headerLines = wrap(company.toUpperCase(), bold, 18, CONTENT_W);
-  for (const l of headerLines) {
-    page.drawText(l, { x: MARGIN, y: y - 18, size: 18, font: bold, color: INK });
-    y -= 24;
+  if (hasLetterhead && c.letterheadPdfBytes) {
+    // Embed page 1 of the uploaded company letterhead as full-page background
+    const letterheadDoc = await PDFDocument.load(c.letterheadPdfBytes, {
+      ignoreEncryption: true,
+    });
+    const [embeddedPage] = await pdf.embedPages([letterheadDoc.getPages()[0]]);
+    page.drawPage(embeddedPage, {
+      x: 0,
+      y: 0,
+      width: PAGE_W,
+      height: PAGE_H,
+    });
+
+    // Reserve generous top safe zone (~190pt / ~2.65 inches) so top letterhead bars never overlap text
+    y = PAGE_H - 190;
+  } else {
+    // ---- Default Header (when no letterhead is uploaded) ------------------
+    const headerLines = wrap(company.toUpperCase(), bold, 18, CONTENT_W);
+    for (const l of headerLines) {
+      page.drawText(l, { x: MARGIN, y: y - 18, size: 18, font: bold, color: INK });
+      y -= 24;
+    }
+    y -= 4;
+    page.drawRectangle({ x: MARGIN, y, width: 48, height: 3, color: ACCENT });
+    y -= 14;
+    page.drawLine({
+      start: { x: MARGIN, y },
+      end: { x: PAGE_W - MARGIN, y },
+      thickness: 0.6,
+      color: RULE,
+    });
+    y -= 36;
   }
-  y -= 4;
-  page.drawRectangle({ x: MARGIN, y, width: 48, height: 3, color: ACCENT });
-  y -= 14;
-  page.drawLine({
-    start: { x: MARGIN, y },
-    end: { x: PAGE_W - MARGIN, y },
-    thickness: 0.6,
-    color: RULE,
-  });
-  y -= 36;
+
+  // ---- Pre-measure body & signature to vertically center inside safe zone --
+  const paragraphs = c.body
+    .split(/\r?\n/)
+    .map((p) => safe(p.trim()))
+    .filter(Boolean);
+
+  const bodySize = 11;
+  const lineHeight = 16.5;
+  const paragraphGap = 9;
+
+  // Keep bottom safe margin (~92pt) clear of any bottom letterhead footer graphics
+  const bottomMargin = hasLetterhead ? 92 : MARGIN;
+  const qrSize = hasLetterhead ? 74 : 86;
+  const footerTop = bottomMargin + qrSize + 20;
+
+  const companyFooterLines = wrap(company, regular, 10, CONTENT_W);
+  const titleAndGreetingH = 34 + 28; // SERVICE LETTER + To Whom It May Concern
+  let bodyH = 0;
+  for (const text of paragraphs) {
+    bodyH += wrap(text, regular, bodySize, CONTENT_W).length * lineHeight + paragraphGap;
+  }
+  const signatureH = 18 + 46 + 15 + 14 + 13 + companyFooterLines.length * 13;
+  const totalMainHeight = titleAndGreetingH + bodyH + signatureH;
+
+  const safeTopY = y;
+  const safeBottomY = footerTop + 18;
+  const available = safeTopY - safeBottomY;
+
+  if (totalMainHeight > available) {
+    throw new Error("The letter text is too long to fit on one page. Shorten the format.");
+  }
+
+  // Vertically center the letter block inside the safe middle area of the letterhead
+  if (hasLetterhead) {
+    const extraSpace = available - totalMainHeight;
+    y = safeTopY - Math.floor(extraSpace / 2);
+  }
 
   // ---- Title and date -------------------------------------------------------
   page.drawText("SERVICE LETTER", { x: MARGIN, y, size: 12, font: bold, color: ACCENT });
@@ -122,33 +179,12 @@ export async function generateLetterPdf(c: LetterContent): Promise<Uint8Array> {
     font: regular,
     color: MUTED,
   });
-  y -= 40;
+  y -= 34;
 
   page.drawText("To Whom It May Concern,", { x: MARGIN, y, size: 11, font: regular, color: INK });
-  y -= 30;
+  y -= 28;
 
   // ---- Body ---------------------------------------------------------------
-  const paragraphs = c.body
-    .split(/\r?\n/)
-    .map((p) => safe(p.trim()))
-    .filter(Boolean);
-
-  const bodySize = 11;
-  const lineHeight = 17;
-  const paragraphGap = 10;
-
-  // Make sure the text cannot run into the signature and the QR area
-  const signatureBlock = 175;
-  const footerTopY = MARGIN + 92 + 34;
-  const available = y - (footerTopY + signatureBlock);
-  let needed = 0;
-  for (const text of paragraphs) {
-    needed += wrap(text, regular, bodySize, CONTENT_W).length * lineHeight + paragraphGap;
-  }
-  if (needed > available) {
-    throw new Error("The letter text is too long to fit on one page. Shorten the format.");
-  }
-
   for (const text of paragraphs) {
     for (const l of wrap(text, regular, bodySize, CONTENT_W)) {
       page.drawText(l, { x: MARGIN, y, size: bodySize, font: regular, color: INK });
@@ -158,28 +194,26 @@ export async function generateLetterPdf(c: LetterContent): Promise<Uint8Array> {
   }
 
   // ---- Signature ----------------------------------------------------------
-  y -= 22;
+  y -= 18;
   page.drawText("Yours faithfully,", { x: MARGIN, y, size: 11, font: regular, color: INK });
-  y -= 58;
+  y -= 46;
   page.drawLine({
     start: { x: MARGIN, y },
     end: { x: MARGIN + 170, y },
     thickness: 0.7,
     color: INK,
   });
-  y -= 16;
-  page.drawText(safe(c.signerName), { x: MARGIN, y, size: 11, font: bold, color: INK });
   y -= 15;
-  page.drawText(safe(c.signerTitle), { x: MARGIN, y, size: 10, font: regular, color: MUTED });
+  page.drawText(safe(c.signerName), { x: MARGIN, y, size: 11, font: bold, color: INK });
   y -= 14;
-  for (const l of wrap(company, regular, 10, CONTENT_W)) {
+  page.drawText(safe(c.signerTitle), { x: MARGIN, y, size: 10, font: regular, color: MUTED });
+  y -= 13;
+  for (const l of companyFooterLines) {
     page.drawText(l, { x: MARGIN, y, size: 10, font: regular, color: MUTED });
     y -= 13;
   }
 
   // ---- Footer: QR code and verification text ------------------------------
-  const qrSize = 92;
-  const footerTop = MARGIN + qrSize + 34;
   page.drawLine({
     start: { x: MARGIN, y: footerTop },
     end: { x: PAGE_W - MARGIN, y: footerTop },
@@ -193,25 +227,25 @@ export async function generateLetterPdf(c: LetterContent): Promise<Uint8Array> {
     errorCorrectionLevel: "M",
   });
   const qrImage = await pdf.embedPng(qrDataUrl);
-  page.drawImage(qrImage, { x: MARGIN, y: MARGIN, width: qrSize, height: qrSize });
+  page.drawImage(qrImage, { x: MARGIN, y: bottomMargin, width: qrSize, height: qrSize });
 
-  const textX = MARGIN + qrSize + 18;
+  const textX = MARGIN + qrSize + 16;
   const textW = PAGE_W - MARGIN - textX;
-  let ty = MARGIN + qrSize - 10;
+  let ty = bottomMargin + qrSize - 8;
 
-  page.drawText("Verify this letter", { x: textX, y: ty, size: 11, font: bold, color: INK });
-  ty -= 15;
+  page.drawText("Verify this letter", { x: textX, y: ty, size: 10, font: bold, color: INK });
+  ty -= 12;
 
   const note =
     "Scan the QR code or open the link below. The digital fingerprint (SHA-256) of this exact file is recorded on the Cardano blockchain, so any change to it will fail verification.";
-  for (const l of wrap(note, regular, 8.5, textW)) {
-    page.drawText(l, { x: textX, y: ty, size: 8.5, font: regular, color: MUTED });
-    ty -= 11.5;
+  for (const l of wrap(note, regular, 7.8, textW)) {
+    page.drawText(l, { x: textX, y: ty, size: 7.8, font: regular, color: MUTED });
+    ty -= 9.8;
   }
-  ty -= 3;
-  for (const l of wrap(c.verifyUrl, regular, 8, textW)) {
-    page.drawText(l, { x: textX, y: ty, size: 8, font: regular, color: ACCENT });
-    ty -= 11;
+  ty -= 2;
+  for (const l of wrap(c.verifyUrl, regular, 7.8, textW)) {
+    page.drawText(l, { x: textX, y: ty, size: 7.8, font: regular, color: ACCENT });
+    ty -= 9.8;
   }
   ty -= 2;
   page.drawText(`Letter ID: ${c.letterId}`, {

@@ -10,10 +10,18 @@ export type UploadPurpose =
   | "letters" // company self-registration: authorization letter
   | "auth-letters" // registrar: authorization letter
   | "br-documents" // registrar: company BR
-  | "registrar-kyc"; // registrar: own NIC / BR
+  | "registrar-kyc" // registrar: own NIC / BR
+  | "company-letterheads"; // company: official PDF letterhead (max 500KB)
 
 const MAX_BYTES = 4 * 1024 * 1024;
-const NEEDS_LOGIN = new Set<UploadPurpose>(["auth-letters", "br-documents", "registrar-kyc"]);
+export const MAX_LETTERHEAD_BYTES = 500 * 1024; // 500 KB
+
+const NEEDS_LOGIN = new Set<UploadPurpose>([
+  "auth-letters",
+  "br-documents",
+  "registrar-kyc",
+  "company-letterheads",
+]);
 
 async function authHeader(): Promise<Record<string, string>> {
   const { data } = await supabase.auth.getSession();
@@ -23,7 +31,16 @@ async function authHeader(): Promise<Record<string, string>> {
 
 /** Uploads a file and returns the storage path to save in the database */
 export async function uploadDocument(file: File, purpose: UploadPurpose): Promise<string> {
-  if (file.size > MAX_BYTES) throw new Error("The file is too large. The limit is 4 MB.");
+  if (purpose === "company-letterheads") {
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      throw new Error("Only PDF files are allowed for the company letterhead.");
+    }
+    if (file.size > MAX_LETTERHEAD_BYTES) {
+      throw new Error("Letterhead PDF is too large. Maximum allowed size is 500 KB.");
+    }
+  } else if (file.size > MAX_BYTES) {
+    throw new Error("The file is too large. The limit is 4 MB.");
+  }
 
   const headers = await authHeader();
   if (NEEDS_LOGIN.has(purpose) && !headers.Authorization) throw new Error("Please sign in.");
@@ -74,5 +91,18 @@ export async function openDocument(ref: string, onError?: (message: string) => v
     const message = err instanceof Error ? err.message : "Could not open the document.";
     if (onError) onError(message);
     else alert(message);
+  }
+}
+
+/** Fetches the stored company letterhead PDF as raw bytes for pdf-lib merging */
+export async function fetchLetterheadBytes(ref: string | null | undefined): Promise<Uint8Array | null> {
+  if (!ref) return null;
+  try {
+    const url = await getDocumentUrl(ref);
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return new Uint8Array(await res.arrayBuffer());
+  } catch {
+    return null;
   }
 }

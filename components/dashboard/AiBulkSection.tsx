@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import type { BrowserWallet } from "@meshsdk/core";
+import type { CompanyLetterhead } from "@/components/dashboard/CompanyProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import type { ReadyFormat } from "@/components/dashboard/BulkIssueSection";
 import { sha256Hex } from "@/lib/hash";
 import { generateLetterPdf } from "@/lib/letter-pdf";
+import { fetchLetterheadBytes } from "@/lib/documents-client";
 import { formatDateOnly, renderTemplate, todayIso } from "@/lib/letter-format";
 import { isAiDesignation, normalizePerformance } from "@/lib/ai-eligibility";
 import {
@@ -21,12 +23,11 @@ import {
   type AuthFetch,
 } from "@/lib/confirm-issue";
 
-/** A bulk Cardano transaction has a size limit, so keep each upload small and safe */
 const MAX_ROWS = 30;
 const AI_CHUNK = 20;
 
 interface Row {
-  rowNumber: number; // Excel row number (header is row 1)
+  rowNumber: number;
   employeeName: string;
   nic: string;
   position: string;
@@ -50,6 +51,7 @@ type Phase = "idle" | "generating" | "generated" | "pdf" | "sign" | "confirm" | 
 
 interface Props {
   companyName: string;
+  letterheads: CompanyLetterhead[];
   formats: ReadyFormat[];
   walletAddress: string;
   connecting: boolean;
@@ -68,7 +70,6 @@ function keySlug(label: string): string {
   return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
-/** Excel serial date or text date -> YYYY-MM-DD */
 function normalizeDate(raw: unknown): string {
   if (raw === null || raw === undefined || raw === "") return "";
   if (typeof raw === "number") {
@@ -86,6 +87,7 @@ function normalizeDate(raw: unknown): string {
 
 export function AiBulkSection({
   companyName,
+  letterheads,
   formats,
   walletAddress,
   connecting,
@@ -96,7 +98,13 @@ export function AiBulkSection({
   onRefreshDashboard,
 }: Props) {
   const [formatId, setFormatId] = useState(formats[0]?.id ?? "");
+  const [selectedLetterheadId, setSelectedLetterheadId] = useState("");
+
   const format = formats.find((f) => f.id === formatId) ?? formats[0] ?? null;
+  const activeLetterhead =
+    selectedLetterheadId === "none"
+      ? null
+      : letterheads.find((lh) => lh.id === selectedLetterheadId) ?? letterheads[0] ?? null;
 
   const [fileName, setFileName] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
@@ -105,7 +113,6 @@ export function AiBulkSection({
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
 
-  // after recording
   const [txHash, setTxHash] = useState("");
   const [zipUrl, setZipUrl] = useState("");
   const [failedNames, setFailedNames] = useState<string[]>([]);
@@ -142,7 +149,6 @@ export function AiBulkSection({
     };
     const sheet = XLSX.utils.json_to_sheet([sample], { header: headers });
     sheet["!cols"] = headers.map((h) => ({ wch: Math.max(h.length + 6, 18) }));
-    // Keep NIC as plain text so Excel never turns 12 digits into 1.99E+11
     for (let r = 2; r <= 500; r++) {
       const ref = `B${r}`;
       if (!sheet[ref]) sheet[ref] = { t: "s", v: "", z: "@" };
@@ -208,7 +214,6 @@ export function AiBulkSection({
     }
   }
 
-  /** Step 2: ask Robin AI for the sentences (only manager / HR manager / supervisor rows) */
   async function handleGenerate() {
     if (rows.length === 0) return;
     setError("");
@@ -243,7 +248,6 @@ export function AiBulkSection({
     }
   }
 
-  /** Confirm every letter on the server, then build the ZIP and download it */
   async function confirmAndFinish(built: BuiltLetter[], tx: string) {
     if (!format) return;
     setPhase("confirm");
@@ -259,7 +263,6 @@ export function AiBulkSection({
     });
 
     try {
-      // First letter alone (waits for Cardano), then the rest together
       await confirmLetterOnServer(authFetch, payloadOf(built[0]));
       const rest = await Promise.allSettled(built.slice(1).map((b) => confirmLetterOnServer(authFetch, payloadOf(b))));
       const failed = built.slice(1).filter((_, i) => rest[i].status === "rejected");
@@ -284,7 +287,6 @@ export function AiBulkSection({
     }
   }
 
-  /** Step 3: "Generate PDF and Record on Cardano" - one click, one Lace approval */
   async function handleRecord() {
     if (!format || rows.length === 0) return;
     if (!walletAddress) {
@@ -296,6 +298,7 @@ export function AiBulkSection({
     try {
       setPhase("pdf");
       const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || window.location.origin).replace(/\/+$/, "");
+      const letterheadPdfBytes = await fetchLetterheadBytes(activeLetterhead?.path ?? null);
       const built: BuiltLetter[] = [];
 
       for (let i = 0; i < rows.length; i++) {
@@ -325,6 +328,7 @@ export function AiBulkSection({
           signerTitle: format.signerTitle,
           issueDate: todayIso(),
           verifyUrl,
+          letterheadPdfBytes,
         });
         const blob = new Blob([new Uint8Array(bytes)], { type: "application/pdf" });
         built.push({
@@ -406,27 +410,47 @@ export function AiBulkSection({
     <div className="space-y-6">
       <Card className="border-slate-200 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg">1. Format and Excel sheet</CardTitle>
+          <CardTitle className="text-lg">1. Format, Letterhead and Excel sheet</CardTitle>
           <CardDescription>
-            Choose a format, download the Excel template, fill in your employees (up to {MAX_ROWS}) and upload it.
+            Choose a format and letterhead, download the Excel template, fill in your employees (up to {MAX_ROWS}) and upload it.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="aiBulkFormat">Format *</Label>
-            <select
-              id="aiBulkFormat"
-              value={format?.id ?? ""}
-              disabled={working}
-              onChange={(e) => setFormatId(e.target.value)}
-              className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            >
-              {formats.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </select>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="aiBulkFormat">Format *</Label>
+              <select
+                id="aiBulkFormat"
+                value={format?.id ?? ""}
+                disabled={working}
+                onChange={(e) => setFormatId(e.target.value)}
+                className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                {formats.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="aiBulkLetterhead">Company Letterhead</Label>
+              <select
+                id="aiBulkLetterhead"
+                value={activeLetterhead?.id ?? "none"}
+                disabled={working}
+                onChange={(e) => setSelectedLetterheadId(e.target.value)}
+                className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                {letterheads.map((lh) => (
+                  <option key={lh.id} value={lh.id}>
+                    {lh.name}
+                  </option>
+                ))}
+                <option value="none">Default Robin Header (No Letterhead)</option>
+              </select>
+            </div>
           </div>
 
           <Button type="button" variant="outline" onClick={handleDownloadTemplate} disabled={!format} className="border-indigo-300 text-indigo-700 hover:bg-indigo-50">

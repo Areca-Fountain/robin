@@ -18,7 +18,7 @@ export async function POST(req: Request) {
       await Promise.all([
         supabase
           .from("company_applications")
-          .select("subscription_plan, subscription_status")
+          .select("subscription_plan, subscription_status, letterhead_url, letterheads")
           .eq("id", ctx.companyId)
           .maybeSingle(),
         supabase
@@ -60,6 +60,10 @@ export async function POST(req: Request) {
       companyRow.data?.subscription_plan === "Premium" ? "Premium" : "Free";
     const totalLetters = letters.count ?? 0;
 
+    const rawLetterheads = Array.isArray(companyRow.data?.letterheads)
+      ? companyRow.data.letterheads
+      : [];
+
     return Response.json({
       email: ctx.email,
       role: ctx.role,
@@ -74,6 +78,8 @@ export async function POST(req: Request) {
         subscriptionStatus: companyRow.data?.subscription_status ?? "Active",
         freeLetterLimit: 5,
         remainingFreeLetters: plan === "Free" ? Math.max(0, 5 - totalLetters) : null,
+        letterheadUrl: (companyRow.data?.letterhead_url as string | null) ?? null,
+        letterheads: rawLetterheads,
       },
       stats: {
         letters: totalLetters,

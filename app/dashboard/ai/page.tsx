@@ -15,6 +15,7 @@ import { sha256Hex } from "@/lib/hash";
 import { generateLetterPdf } from "@/lib/letter-pdf";
 import { formatDateOnly, renderTemplate, todayIso } from "@/lib/letter-format";
 import { walletKey } from "@/lib/wallet-key";
+import { fetchLetterheadBytes } from "@/lib/documents-client";
 import { AI_MAX_LINE_CHARS, PERFORMANCE_LEVELS, isAiDesignation } from "@/lib/ai-eligibility";
 import {
   confirmLetterOnServer,
@@ -51,6 +52,7 @@ export default function GenerateWithRobinAiPage() {
   const [formats, setFormats] = useState<ReadyFormat[]>([]);
   const [formatsLoading, setFormatsLoading] = useState(true);
   const [formatId, setFormatId] = useState("");
+  const [selectedLetterheadId, setSelectedLetterheadId] = useState<string>("");
 
   const [connecting, setConnecting] = useState(false);
   const [walletAddress, setWalletAddress] = useState("");
@@ -100,8 +102,12 @@ export default function GenerateWithRobinAiPage() {
   }, [authFetch]);
 
   const format = formats.find((f) => f.id === formatId) ?? null;
+  const letterheads = me?.company.letterheads ?? [];
+  const activeLetterhead =
+    selectedLetterheadId === "none"
+      ? null
+      : letterheads.find((lh) => lh.id === selectedLetterheadId) ?? letterheads[0] ?? null;
 
-  // The preview is only valid for the exact details it was generated for
   const inputsKey = JSON.stringify([formatId, employeeName.trim(), nic.trim(), position.trim(), startDate, stillEmployed, stillEmployed ? "" : endDate, keyDuty.trim(), performance]);
   const previewReady = generatedKey !== "" && generatedKey === inputsKey;
 
@@ -141,7 +147,7 @@ export default function GenerateWithRobinAiPage() {
     if (!registeredKey) {
       throw new Error("No wallet is connected to your company yet. Open Settings, connect your Lace wallet there, then come back.");
     }
-    if (!connectedKey || connectedKey !== registeredKey) {
+    if (!connectedKey || !registeredKey || connectedKey !== registeredKey) {
       throw new Error("This is not the wallet your company registered with. Switch to the registered wallet in Lace and connect again.");
     }
 
@@ -176,7 +182,6 @@ export default function GenerateWithRobinAiPage() {
     return null;
   }
 
-  /** Generate button: asks Robin AI for one short sentence (manager / HR manager / supervisor only) */
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
     setErrorMsg("");
@@ -224,7 +229,7 @@ export default function GenerateWithRobinAiPage() {
       setIssued(record);
       setPending(null);
       setStep("done");
-      triggerDownload(record.blobUrl, record.fileName); // PDF downloads automatically
+      triggerDownload(record.blobUrl, record.fileName);
       void refresh();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Something went wrong.");
@@ -233,7 +238,6 @@ export default function GenerateWithRobinAiPage() {
     }
   }
 
-  /** "Generate PDF and Record on Cardano" */
   async function handleRecord() {
     setErrorMsg("");
     if (!me || !format) return;
@@ -256,6 +260,7 @@ export default function GenerateWithRobinAiPage() {
       const letterId = crypto.randomUUID();
       const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || window.location.origin).replace(/\/+$/, "");
       const verifyUrl = `${baseUrl}/verify/${letterId}`;
+      const letterheadPdfBytes = await fetchLetterheadBytes(activeLetterhead?.path ?? null);
 
       const bytes = await generateLetterPdf({
         letterId,
@@ -266,6 +271,7 @@ export default function GenerateWithRobinAiPage() {
         signerTitle: format.signerTitle,
         issueDate: todayIso(),
         verifyUrl,
+        letterheadPdfBytes,
       });
       const blob = new Blob([new Uint8Array(bytes)], { type: "application/pdf" });
       const letterHash = await sha256Hex(blob);
@@ -423,6 +429,7 @@ export default function GenerateWithRobinAiPage() {
         isPremium ? (
           <AiBulkSection
             companyName={me.company.name}
+            letterheads={letterheads}
             formats={formats}
             walletAddress={walletAddress}
             connecting={connecting}
@@ -493,20 +500,39 @@ export default function GenerateWithRobinAiPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <fieldset disabled={busy || generating} className="space-y-4">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="aiFormat">Format</Label>
-                    <select
-                      id="aiFormat"
-                      value={formatId}
-                      onChange={(e) => setFormatId(e.target.value)}
-                      className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                    >
-                      {formats.map((f) => (
-                        <option key={f.id} value={f.id}>
-                          {f.name}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="aiFormat">Format *</Label>
+                      <select
+                        id="aiFormat"
+                        value={formatId}
+                        onChange={(e) => setFormatId(e.target.value)}
+                        className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        {formats.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="aiLetterhead">Company Letterhead</Label>
+                      <select
+                        id="aiLetterhead"
+                        value={activeLetterhead?.id ?? "none"}
+                        onChange={(e) => setSelectedLetterheadId(e.target.value)}
+                        className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        {letterheads.map((lh) => (
+                          <option key={lh.id} value={lh.id}>
+                            {lh.name}
+                          </option>
+                        ))}
+                        <option value="none">Default Robin Header (No Letterhead)</option>
+                      </select>
+                    </div>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -540,7 +566,7 @@ export default function GenerateWithRobinAiPage() {
                           id="aiPerf"
                           value={performance}
                           onChange={(e) => setPerformance(e.target.value)}
-                          className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                          className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                         >
                           <option value="">Do not mention</option>
                           {PERFORMANCE_LEVELS.map((p) => (
@@ -603,7 +629,8 @@ export default function GenerateWithRobinAiPage() {
                       </div>
                     )}
                     <p className="text-xs text-slate-500">
-                      Signed by {format?.signerName}, {format?.signerTitle}. The PDF also gets a QR code.
+                      Signed by {format?.signerName}, {format?.signerTitle}. The PDF also gets a QR code
+                      {activeLetterhead ? ` and uses "${activeLetterhead.name}"` : ""}.
                     </p>
                   </div>
                 )}

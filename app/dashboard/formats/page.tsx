@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useCompany } from "@/components/dashboard/CompanyProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,11 @@ import {
   STARTER_BODY,
   validateFormat,
 } from "@/lib/letter-format";
+import {
+  MAX_LETTERHEAD_BYTES,
+  openDocument,
+  uploadDocument,
+} from "@/lib/documents-client";
 
 interface Format {
   id: string;
@@ -34,6 +39,13 @@ export default function FormatsPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Multiple Letterheads state
+  const letterheadInputRef = useRef<HTMLInputElement | null>(null);
+  const [addingLetterhead, setAddingLetterhead] = useState(false);
+  const [newLetterheadName, setNewLetterheadName] = useState("");
+  const [newLetterheadFile, setNewLetterheadFile] = useState<File | null>(null);
+  const [letterheadBusy, setLetterheadBusy] = useState(false);
 
   // Editor
   const [editing, setEditing] = useState(false);
@@ -76,6 +88,87 @@ export default function FormatsPage() {
       active = false;
     };
   }, [authFetch]);
+
+  function handleSelectLetterheadFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setError("");
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      setError("Please select a valid PDF file (.pdf) for your letterhead.");
+      return;
+    }
+    if (file.size > MAX_LETTERHEAD_BYTES) {
+      setError("Letterhead PDF exceeds the 500 KB maximum limit. Please compress the PDF and try again.");
+      return;
+    }
+
+    setNewLetterheadFile(file);
+    if (!newLetterheadName.trim()) {
+      const baseName = file.name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim();
+      setNewLetterheadName(baseName.slice(0, 60));
+    }
+  }
+
+  async function handleSaveLetterhead(e: FormEvent) {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+
+    const trimmedName = newLetterheadName.trim();
+    if (!trimmedName) {
+      setError("Please enter a name for this letterhead.");
+      return;
+    }
+    if (!newLetterheadFile) {
+      setError("Please choose a PDF file (max 500 KB) for this letterhead.");
+      return;
+    }
+
+    setLetterheadBusy(true);
+    try {
+      const path = await uploadDocument(newLetterheadFile, "company-letterheads");
+      const res = await authFetch("/api/company/letterhead", {
+        action: "save",
+        name: trimmedName,
+        path,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Could not save letterhead.");
+
+      setNewLetterheadName("");
+      setNewLetterheadFile(null);
+      setAddingLetterhead(false);
+      setMessage(`Letterhead "${trimmedName}" added. You can select it when issuing letters.`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload letterhead.");
+    } finally {
+      setLetterheadBusy(false);
+    }
+  }
+
+  async function handleDeleteLetterhead(itemId: string, itemName: string) {
+    if (!window.confirm(`Delete the letterhead "${itemName}"?`)) {
+      return;
+    }
+    setError("");
+    setMessage("");
+    setLetterheadBusy(true);
+    try {
+      const res = await authFetch("/api/company/letterhead", { action: "delete", id: itemId });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Could not delete letterhead.");
+
+      setMessage(`Letterhead "${itemName}" deleted.`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete letterhead.");
+    } finally {
+      setLetterheadBusy(false);
+    }
+  }
 
   function openEditor(f?: Format) {
     setError("");
@@ -139,6 +232,8 @@ export default function FormatsPage() {
     }
   }
 
+  const letterheads = me?.company.letterheads ?? [];
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -165,6 +260,158 @@ export default function FormatsPage() {
         <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
           {error}
         </p>
+      )}
+
+      {/* COMPANY LETTERHEADS SECTION (Multiple Named Letterheads, Max 500KB PDF each) */}
+      {!editing && (
+        <Card className="border-slate-200 shadow-sm">
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-base font-semibold text-slate-900">
+                  Company Letterheads (PDF)
+                </CardTitle>
+                <CardDescription className="mt-1">
+                  Upload single-page A4 PDF letterheads with custom names. Letter content is automatically centered inside the safe middle area.{" "}
+                  <strong className="text-slate-700">Max size: 500 KB each.</strong>
+                </CardDescription>
+              </div>
+              {!addingLetterhead && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={letterheadBusy}
+                  onClick={() => {
+                    setError("");
+                    setMessage("");
+                    setAddingLetterhead(true);
+                  }}
+                  className="border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                >
+                  + Add Letterhead
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {addingLetterhead && (
+              <form
+                onSubmit={handleSaveLetterhead}
+                className="space-y-4 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4"
+              >
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="lhName">Letterhead Name *</Label>
+                    <Input
+                      id="lhName"
+                      value={newLetterheadName}
+                      onChange={(e) => setNewLetterheadName(e.target.value)}
+                      maxLength={60}
+                      placeholder="e.g. Head Office Letterhead"
+                      disabled={letterheadBusy}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Letterhead PDF (Max 500 KB) *</Label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        ref={letterheadInputRef}
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        className="hidden"
+                        onChange={handleSelectLetterheadFile}
+                        disabled={letterheadBusy}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={letterheadBusy}
+                        onClick={() => letterheadInputRef.current?.click()}
+                        className="bg-white"
+                      >
+                        {newLetterheadFile ? "Change PDF" : "Choose PDF File"}
+                      </Button>
+                      <span className="truncate text-xs text-slate-600">
+                        {newLetterheadFile
+                          ? `${newLetterheadFile.name} (${Math.ceil(newLetterheadFile.size / 1024)} KB)`
+                          : "No file selected"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={letterheadBusy || !newLetterheadFile || !newLetterheadName.trim()}
+                    className="bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    {letterheadBusy ? "Uploading…" : "Save Letterhead"}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={letterheadBusy}
+                    onClick={() => {
+                      setAddingLetterhead(false);
+                      setNewLetterheadName("");
+                      setNewLetterheadFile(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            )}
+
+            {letterheads.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                No letterheads uploaded yet. Letters will use the default Robin header until you add one.
+              </p>
+            ) : (
+              <div className="divide-y rounded-lg border border-slate-200 bg-slate-50/70">
+                {letterheads.map((lh) => (
+                  <div
+                    key={lh.id}
+                    className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className="font-medium text-sm text-slate-900">{lh.name}</span>
+                      <Badge variant="outline" className="bg-white text-xs text-slate-600">
+                        PDF
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={letterheadBusy}
+                        onClick={() => void openDocument(lh.path, (msg) => setError(msg))}
+                      >
+                        Preview
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        disabled={letterheadBusy}
+                        onClick={() => void handleDeleteLetterhead(lh.id, lh.name)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {editing && (
