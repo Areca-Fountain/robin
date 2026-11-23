@@ -50,3 +50,6 @@ next-env.d.ts
 
 /midnight/managed/
 /public/midnight/managed/
+
+/midnight/deployment.json
+robin-midnight-admin-secret.json

@@ -2,6 +2,7 @@
   "name": "robin-midnight-contract",
   "private": true,
   "version": "0.1.0",
+  "type": "module",
   "description": "Compact contract for Robin private service letters (Midnight)",
   "scripts": {
     "compile": "compact compile robin_private.compact managed/robin_private",

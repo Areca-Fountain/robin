@@ -1,153 +1,171 @@
 'use client';
 
-import { findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
+import {
+  deployContract,
+  findDeployedContract,
+} from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import { MIDNIGHT_CONTRACT_ADDRESS } from './config';
 import { buildBrowserMidnightProviders } from './providers';
 import type { ConnectedMidnightWallet } from './lace-connector';
 import {
   witnesses,
-  createEmptyPrivateState,
+  adminPrivateState,
+  companyPrivateState,
+  emptyPrivateState,
   type RobinPrivateState,
 } from '../../midnight/witnesses';
 import {
-  hexToBytes32,
-  type PrivateLetterCredential,
+  fromHex,
+  toHex,
+  toChainAttributes,
+  type ChainAttributes,
+  type CredentialPackage,
 } from './credential';
 
-const PRIVATE_STATE_ID = 'robin-private-contract-v1';
+// One private-state slot per role, so one role never overwrites another.
+const ADMIN_STATE_ID = 'robin-admin-state';
+const COMPANY_STATE_ID = 'robin-company-state';
+const EMPLOYEE_STATE_ID = 'robin-employee-state';
 
 async function loadCompiledContract() {
-  // Dynamically load the compiled Compact output generated in Step 1
   const contractModule = await import(
     '../../midnight/managed/robin_private/contract/index.js'
   );
-  return CompiledContract.make(
-    'robin_private',
-    contractModule.Contract
-  ).pipe(
+  return CompiledContract.make('robin_private', contractModule.Contract).pipe(
     CompiledContract.withWitnesses(witnesses),
     CompiledContract.withCompiledFileAssets('/midnight/managed/robin_private')
   );
 }
 
-/**
- * Joins the deployed robin_private contract on Midnight Preprod with optional initial private state.
- */
-export async function joinRobinPrivateContract(
+/** Admin-only, one time: deploys the contract. adminSecret becomes the admin key. */
+export async function deployRobinPrivate(
   wallet: ConnectedMidnightWallet,
-  initialPrivateState?: RobinPrivateState
+  adminSecret: Uint8Array
+): Promise<{ contractAddress: string; txId: string }> {
+  const providers = buildBrowserMidnightProviders(wallet);
+  const compiledContract = await loadCompiledContract();
+  const state = adminPrivateState(adminSecret);
+
+  const deployed = await deployContract(providers, {
+    compiledContract,
+    privateStateId: ADMIN_STATE_ID,
+    initialPrivateState: state,
+    args: [adminSecret], // constructor(sk: Bytes<32>)
+  } as never);
+
+  return {
+    contractAddress: deployed.deployTxData.public.contractAddress,
+    txId: deployed.deployTxData.public.txId,
+  };
+}
+
+async function join(
+  wallet: ConnectedMidnightWallet,
+  stateId: string,
+  state: RobinPrivateState
 ) {
   if (!MIDNIGHT_CONTRACT_ADDRESS) {
     throw new Error(
       'NEXT_PUBLIC_MIDNIGHT_CONTRACT_ADDRESS is not set. Deploy the contract first.'
     );
   }
-
   const providers = buildBrowserMidnightProviders(wallet);
-  const compiledContract = await loadCompiledContract();
+  // Write the state BEFORE joining so a stale stored state never wins.
+  await providers.privateStateProvider.set(stateId, state);
 
+  const compiledContract = await loadCompiledContract();
   const deployed = await findDeployedContract(providers, {
     compiledContract,
     contractAddress: MIDNIGHT_CONTRACT_ADDRESS,
-    privateStateId: PRIVATE_STATE_ID,
-    initialPrivateState: initialPrivateState ?? createEmptyPrivateState(),
-  });
-
-  return { deployed, providers };
+    privateStateId: stateId,
+    initialPrivateState: state,
+  } as never);
+  return deployed as any;
 }
 
-/**
- * Admin-only: registers a verified company's issuerId on Midnight.
- */
+/** Admin: registers a verified company's issuerId. */
 export async function callRegisterIssuer(
   wallet: ConnectedMidnightWallet,
+  adminSecretHex: string,
   issuerIdHex: string
 ): Promise<string> {
-  const { deployed } = await joinRobinPrivateContract(wallet);
-  const tx = await deployed.callTx.registerIssuer(hexToBytes32(issuerIdHex));
+  const deployed = await join(
+    wallet,
+    ADMIN_STATE_ID,
+    adminPrivateState(fromHex(adminSecretHex))
+  );
+  const tx = await deployed.callTx.registerIssuer(fromHex(issuerIdHex));
   return tx.public.txId;
 }
 
-/**
- * Company-only: stores the company's issuerSecret in local private state and registers a commitment.
- */
+/** Company: registers a letter. Only the commitment goes on-chain. */
 export async function callIssueLetter(
   wallet: ConnectedMidnightWallet,
   issuerSecretHex: string,
-  commitmentHex: string
-): Promise<string> {
-  const state = createEmptyPrivateState();
-  state.issuerSecret = hexToBytes32(issuerSecretHex);
-
-  const { deployed, providers } = await joinRobinPrivateContract(wallet, state);
-  await providers.privateStateProvider.set(PRIVATE_STATE_ID, state);
-
-  const tx = await deployed.callTx.issueLetter(hexToBytes32(commitmentHex));
-  return tx.public.txId;
+  attributes: ChainAttributes,
+  saltHex: string
+): Promise<{ txId: string; commitmentHex: string }> {
+  const deployed = await join(
+    wallet,
+    COMPANY_STATE_ID,
+    companyPrivateState(fromHex(issuerSecretHex))
+  );
+  const tx = await deployed.callTx.issueLetter(attributes, fromHex(saltHex));
+  return {
+    txId: tx.public.txId,
+    commitmentHex: toHex(tx.private.result as Uint8Array),
+  };
 }
 
-/**
- * Company-only: revokes a previously issued letter commitment on Midnight.
- */
+/** Company: revokes one of its own letters. */
 export async function callRevokeLetter(
   wallet: ConnectedMidnightWallet,
   issuerSecretHex: string,
   commitmentHex: string
 ): Promise<string> {
-  const state = createEmptyPrivateState();
-  state.issuerSecret = hexToBytes32(issuerSecretHex);
-
-  const { deployed, providers } = await joinRobinPrivateContract(wallet, state);
-  await providers.privateStateProvider.set(PRIVATE_STATE_ID, state);
-
-  const tx = await deployed.callTx.revokeLetter(hexToBytes32(commitmentHex));
+  const deployed = await join(
+    wallet,
+    COMPANY_STATE_ID,
+    companyPrivateState(fromHex(issuerSecretHex))
+  );
+  const tx = await deployed.callTx.revokeLetter(fromHex(commitmentHex));
   return tx.public.txId;
 }
 
-/**
- * Employee-only: loads the employee's credential into local private state and runs a ZK proof circuit.
- */
+/** Employee: proves a claim from their credential file. */
 export async function callProveClaim(
   wallet: ConnectedMidnightWallet,
-  credential: PrivateLetterCredential,
+  credential: CredentialPackage,
   nonceHex: string,
   claim:
     | { type: 'employment' }
     | { type: 'tenure'; minDays: number }
     | { type: 'position'; positionHashHex: string }
 ): Promise<string> {
-  const state: RobinPrivateState = {
-    issuerSecret: new Uint8Array(32),
-    employeeNameHash: hexToBytes32(credential.employeeNameHash),
-    nicHash: hexToBytes32(credential.nicHash),
-    positionHash: hexToBytes32(credential.positionHash),
-    startDay: BigInt(credential.startDay),
-    endDay: BigInt(credential.endDay),
-    salt: hexToBytes32(credential.salt),
-  };
-
-  const { deployed, providers } = await joinRobinPrivateContract(wallet, state);
-  await providers.privateStateProvider.set(PRIVATE_STATE_ID, state);
-
-  const nonceBytes = hexToBytes32(nonceHex);
+  const deployed = await join(wallet, EMPLOYEE_STATE_ID, emptyPrivateState());
+  const attrs = toChainAttributes(credential);
+  const salt = fromHex(credential.salt);
+  const nonce = fromHex(nonceHex);
 
   if (claim.type === 'employment') {
-    const tx = await deployed.callTx.proveVerifiedEmployment(nonceBytes);
+    const tx = await deployed.callTx.proveVerifiedEmployment(attrs, salt, nonce);
     return tx.public.txId;
   }
-
   if (claim.type === 'tenure') {
     const tx = await deployed.callTx.proveMinTenure(
-      nonceBytes,
+      attrs,
+      salt,
+      nonce,
       BigInt(claim.minDays)
     );
     return tx.public.txId;
   }
-
   const tx = await deployed.callTx.provePosition(
-    nonceBytes,
-    hexToBytes32(claim.positionHashHex)
+    attrs,
+    salt,
+    nonce,
+    fromHex(claim.positionHashHex)
   );
   return tx.public.txId;
 }
