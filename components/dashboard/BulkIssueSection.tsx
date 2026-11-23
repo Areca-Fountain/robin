@@ -415,6 +415,7 @@ export function BulkIssueSection({
         employeeName: item.employeeName,
         position: item.position,
         formatId: formatIdUsed,
+        workStatus: item.stillEmployed ? "active" : "resigned",
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 200 && data.status === "issued") {

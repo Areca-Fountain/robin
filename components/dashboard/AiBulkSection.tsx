@@ -260,6 +260,7 @@ export function AiBulkSection({
       employeeName: b.row.employeeName,
       position: b.row.position,
       formatId: format.id,
+      workStatus: (b.row.stillEmployed ? "active" : "resigned") as "active" | "resigned",
     });
 
     try {

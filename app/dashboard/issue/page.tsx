@@ -36,6 +36,7 @@ interface PendingRecord {
   employeeName: string;
   position: string;
   formatId: string;
+  workStatus: "active" | "resigned";
   fileName: string;
   blobUrl: string;
   verifyUrl: string;
@@ -208,6 +209,7 @@ export default function IssueLetterPage() {
           employeeName: record.employeeName,
           position: record.position,
           formatId: record.formatId,
+          workStatus: record.workStatus,
         });
         const data = await res.json().catch(() => ({}));
 
@@ -315,6 +317,7 @@ export default function IssueLetterPage() {
       const letterHash = await sha256Hex(blob);
       const blobUrl = URL.createObjectURL(blob);
       const fileName = `service-letter-${slug(employeeName)}.pdf`;
+      const workStatus = stillEmployed ? "active" : "resigned";
 
       setStep("sign");
       const { wallet } = await getFreshLaceWallet();
@@ -329,6 +332,7 @@ export default function IssueLetterPage() {
         employeeName: employeeName.trim(),
         position: position.trim(),
         formatId: format.id,
+        workStatus,
         fileName,
         blobUrl,
         verifyUrl,

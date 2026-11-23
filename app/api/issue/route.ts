@@ -24,6 +24,10 @@ export async function POST(req: Request) {
       typeof body.employeeName === "string" ? body.employeeName.trim() : "";
     const position = typeof body.position === "string" ? body.position.trim() : "";
     const formatId = typeof body.formatId === "string" ? body.formatId.trim() : "";
+    const workStatus =
+      body.workStatus === "active" || body.workStatus === "resigned"
+        ? body.workStatus
+        : null;
 
     if (!UUID_REGEX.test(letterId)) return bad("letterId must be a UUID.");
     if (!isValidHash(letterHash)) return bad("letterHash must be a 64-character SHA-256 hex string.");
@@ -149,6 +153,7 @@ export async function POST(req: Request) {
       company_name: ctx.companyName,
       employee_name: employeeName,
       position: position || null,
+      work_status: workStatus,
       issued_at: issuedAt,
       letter_hash: letterHash,
       tx_hash: txHash,
