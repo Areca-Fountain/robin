@@ -42,11 +42,11 @@ export function findLaceMidnightConnector(): {
     return { key: 'mnLace', connector: window.midnight.mnLace };
   }
 
-  for (const [key, entry] of Object.entries(window.midnight)) {
+    for (const [key, entry] of Object.entries(window.midnight)) {
     if (!entry || typeof entry.connect !== 'function') continue;
     const name = (entry.name || '').toLowerCase();
     const rdns = ((entry as unknown as { rdns?: string }).rdns || '').toLowerCase();
-    if (name.includes('lace') || rdns === 'io.lace.wallet') {
+    if (name.includes('lace') || rdns === 'io.lace.wallet' || name.includes('1am')) {
       return { key, connector: entry };
     }
   }

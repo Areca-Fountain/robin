@@ -62,13 +62,15 @@ export function buildBrowserMidnightProviders(wallet: ConnectedMidnightWallet) {
   );
 
   const walletProvider = {
+    supportedEras: ['v9'] as const,
     getCoinPublicKey: () => wallet.coinPublicKey,
     getEncryptionPublicKey: () => wallet.encryptionPublicKey,
     async balanceTx(
       tx: UnboundTransaction,
       _newCoins?: unknown
     ): Promise<FinalizedTransaction> {
-      const serialized = Buffer.from(tx.serialize()).toString('hex');
+    const serialized = Buffer.from(tx.serialize()).toString('hex');
+      console.log('TX TAG:', Buffer.from(tx.serialize()).subarray(0, 120).toString('latin1'));
       const balanced = await wallet.api.balanceUnsealedTransaction(serialized);
       const { Transaction } = await import('@midnight-ntwrk/ledger-v9');
       return Transaction.deserialize(
@@ -78,6 +80,7 @@ export function buildBrowserMidnightProviders(wallet: ConnectedMidnightWallet) {
   };
 
   const midnightProvider = {
+    supportedEras: ['v9'] as const,
     async submitTx(tx: FinalizedTransaction): Promise<string> {
       const serialized = Buffer.from(tx.serialize()).toString('hex');
       return await wallet.api.submitTransaction(serialized);
