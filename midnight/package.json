@@ -1,0 +1,10 @@
+{
+  "name": "robin-midnight-contract",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Compact contract for Robin private service letters (Midnight)",
+  "scripts": {
+    "compile": "compact compile robin_private.compact managed/robin_private",
+    "compile:fast": "compact compile --skip-zk robin_private.compact managed/robin_private"
+  }
+}

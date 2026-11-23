@@ -1,0 +1,187 @@
+// Robin Private - privacy-preserving service letters on Midnight
+//
+// What goes on the PUBLIC ledger:
+//   - admin        : hash of Robin's admin secret (who may register issuers)
+//   - issuers      : verified companies (hash of each company's issuer secret)
+//   - letters      : commitment -> issuer id   (a commitment hides all employee data)
+//   - revoked      : commitments the issuer revoked
+//   - receipts     : verifier nonce -> what was proven (never the data itself)
+//
+// What stays PRIVATE (only the employee's device ever sees it):
+//   name, NIC, position, dates, and the random salt.
+//
+// MVP trade-off: a verification publishes the letter's commitment (not its
+// content), so someone could link that proof to the issuing transaction.
+// A Merkle-tree version removes this link - planned as a later upgrade.
+
+pragma language_version >= 0.27;
+
+import CompactStandardLibrary;
+
+// ------------------------------------------------------------------ types
+
+// Employee data. Text fields are stored as SHA-256 hashes (done in the app),
+// dates as "days since 1970-01-01".
+export struct Attributes {
+  nicHash: Bytes<32>,
+  nameHash: Bytes<32>,
+  positionHash: Bytes<32>,
+  startDay: Uint<32>,
+  endDay: Uint<32>
+}
+
+// What a verifier reads back from the ledger after the employee proves a claim.
+// claim: 1 = verified employment, 2 = minimum tenure, 3 = position matches
+export struct Receipt {
+  issuer: Bytes<32>,
+  claim: Uint<8>,
+  minDays: Uint<32>,
+  positionHash: Bytes<32>
+}
+
+// ----------------------------------------------------------------- ledger
+
+export ledger admin: Bytes<32>;
+export ledger issuers: Set<Bytes<32>>;
+export ledger letters: Map<Bytes<32>, Bytes<32>>;
+export ledger revoked: Set<Bytes<32>>;
+export ledger receipts: Map<Bytes<32>, Receipt>;
+
+// ------------------------------------------------------------- witnesses
+// Implemented in TypeScript (midnight/witnesses.ts). They never leave the device.
+
+witness issuerSecret(): Bytes<32>;
+witness adminSecret(): Bytes<32>;
+
+// ---------------------------------------------------------------- helpers
+
+pure circuit adminKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "robin:admin:pk"), sk]);
+}
+
+pure circuit issuerKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "robin:issuer:pk"), sk]);
+}
+
+pure circuit commit(a: Attributes, salt: Bytes<32>): Bytes<32> {
+  return persistentCommit<Attributes>(a, salt);
+}
+
+// Callable from TypeScript (pureCircuits.*) so the app and the contract always
+// compute exactly the same values.
+export pure circuit commitmentOf(a: Attributes, salt: Bytes<32>): Bytes<32> {
+  return disclose(commit(a, salt));
+}
+
+export pure circuit issuerIdOf(sk: Bytes<32>): Bytes<32> {
+  return disclose(issuerKey(sk));
+}
+
+// Checks that a letter is on the ledger, not revoked, and from a registered issuer.
+// Returns the issuer id.
+circuit openLetter(a: Attributes, salt: Bytes<32>): Bytes<32> {
+  const c = disclose(commit(a, salt));
+  assert(letters.member(c), "Letter not found");
+  assert(!revoked.member(c), "Letter has been revoked");
+  const issuer = letters.lookup(c);
+  assert(issuers.member(issuer), "Issuer is not registered");
+  return issuer;
+}
+
+circuit record(
+  nonce: Bytes<32>,
+  issuer: Bytes<32>,
+  claim: Uint<8>,
+  minDays: Uint<32>,
+  positionHash: Bytes<32>
+): [] {
+  const n = disclose(nonce);
+  assert(!receipts.member(n), "This request was already answered");
+  receipts.insert(
+    n,
+    Receipt {
+      issuer: disclose(issuer),
+      claim: disclose(claim),
+      minDays: disclose(minDays),
+      positionHash: disclose(positionHash)
+    }
+  );
+}
+
+// ---------------------------------------------------- Robin admin circuits
+
+constructor(sk: Bytes<32>) {
+  admin = disclose(adminKey(sk));
+}
+
+// Called when Robin's team marks a company as Verified.
+export circuit registerIssuer(id: Bytes<32>): [] {
+  assert(adminKey(adminSecret()) == admin, "Only Robin admin can do this");
+  issuers.insert(disclose(id));
+}
+
+export circuit removeIssuer(id: Bytes<32>): [] {
+  assert(adminKey(adminSecret()) == admin, "Only Robin admin can do this");
+  issuers.remove(disclose(id));
+}
+
+// ---------------------------------------------------- company circuits
+
+// Registers a letter. The employee data is a private argument: only the
+// commitment is published. Returns the commitment so the app can store it.
+export circuit issueLetter(a: Attributes, salt: Bytes<32>): Bytes<32> {
+  const me = disclose(issuerKey(issuerSecret()));
+  assert(issuers.member(me), "Not a registered issuer");
+  const c = disclose(commit(a, salt));
+  assert(!letters.member(c), "Letter already issued");
+  letters.insert(c, me);
+  return c;
+}
+
+// Only the company that issued the letter can revoke it.
+export circuit revokeLetter(commitment: Bytes<32>): [] {
+  const me = disclose(issuerKey(issuerSecret()));
+  const c = disclose(commitment);
+  assert(letters.member(c), "Letter not found");
+  assert(letters.lookup(c) == me, "Only the issuing company can revoke");
+  revoked.insert(c);
+}
+
+// ---------------------------------------------------- employee circuits
+// The employee's device runs these. `nonce` comes from the verifier's request.
+
+// Claim 1: "I hold a valid letter from a registered company."
+export circuit proveVerifiedEmployment(
+  a: Attributes,
+  salt: Bytes<32>,
+  nonce: Bytes<32>
+): [] {
+  const issuer = openLetter(a, salt);
+  record(nonce, issuer, 1, 0, pad(32, ""));
+}
+
+// Claim 2: "I worked for at least `minDays` days."
+// (For current employees the company sets endDay to the issue date.)
+export circuit proveMinTenure(
+  a: Attributes,
+  salt: Bytes<32>,
+  nonce: Bytes<32>,
+  minDays: Uint<32>
+): [] {
+  const issuer = openLetter(a, salt);
+  assert(a.endDay >= a.startDay, "Invalid dates in letter");
+  assert(a.endDay - a.startDay >= minDays, "Tenure is shorter than requested");
+  record(nonce, issuer, 2, minDays, pad(32, ""));
+}
+
+// Claim 3: "My position is exactly the one you asked about."
+export circuit provePosition(
+  a: Attributes,
+  salt: Bytes<32>,
+  nonce: Bytes<32>,
+  positionHash: Bytes<32>
+): [] {
+  const issuer = openLetter(a, salt);
+  assert(a.positionHash == positionHash, "Position does not match");
+  record(nonce, issuer, 3, 0, positionHash);
+}
