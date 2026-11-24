@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, connection } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import {
   AuthError,
@@ -17,9 +17,34 @@ const COLUMNS =
  * Admin: any company. Company account: only its own company.
  */
 export async function GET(req: NextRequest) {
+  await connection();
   try {
     const companyId = req.nextUrl.searchParams.get("companyId")?.trim();
-    if (!companyId) return Response.json({ error: "Missing companyId" }, { status: 400 });
+
+    // No companyId: the admin list of every enrolled company (with its name).
+    if (!companyId) {
+      await requireAdmin(req);
+      const supabase = getSupabaseAdmin();
+      const { data: rows, error: listError } = await supabase
+        .from("mn_issuers")
+        .select(COLUMNS)
+        .order("updated_at", { ascending: false });
+      if (listError) throw listError;
+
+      const ids = (rows ?? []).map((r) => r.company_id);
+      const names = new Map<string, string>();
+      if (ids.length > 0) {
+        const { data: companies, error: namesError } = await supabase
+          .from("company_applications")
+          .select("id, company_name")
+          .in("id", ids);
+        if (namesError) throw namesError;
+        for (const c of companies ?? []) names.set(c.id as string, c.company_name as string);
+      }
+      return Response.json({
+        issuers: (rows ?? []).map((r) => ({ ...r, companyName: names.get(r.company_id) ?? null })),
+      });
+    }
 
     let isAdmin = false;
     try {

@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, connection } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { errorResponse } from "@/lib/auth-server";
 
@@ -10,6 +10,7 @@ const HEX64 = /^[0-9a-f]{64}$/i;
  * its Robin verification status (Verified / Not verified), for the verifier's screen.
  */
 export async function GET(req: NextRequest) {
+  await connection(); // read per request, never prerendered at build time
   try {
     const issuerId = (req.nextUrl.searchParams.get("issuerId") ?? "").trim().toLowerCase();
     if (!HEX64.test(issuerId)) {

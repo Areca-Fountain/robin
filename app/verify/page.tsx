@@ -121,6 +121,7 @@ export default function VerifyPage() {
           <VerifyResult result={result} />
         </div>
       )}
+    <p className="mt-8 text-center text-sm text-zinc-500">Need to verify a fact without seeing the letter? <a href="/verify-private" className="underline">Verify privately</a></p>
     </main>
   );
 }

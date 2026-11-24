@@ -15,6 +15,7 @@ import { fetchAccount, type AccountInfo } from "@/lib/client-auth";
 const LINKS = [
   { href: "/", label: "Home" },
   { href: "/verify", label: "Verify Service Letter" },
+  { href: "/verify-private", label: "Private Verify" },
   { href: "/about", label: "About us" },
 ];
 

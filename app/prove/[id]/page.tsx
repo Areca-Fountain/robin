@@ -3,7 +3,7 @@
 // Employee page. Opened from the verifier's link. The employee loads their own
 // credential file; the proof is made in the browser and only the answer goes on-chain.
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,7 +34,7 @@ function describe(req: VerifyRequest) {
   return "that you held the position the verifier named";
 }
 
-export default function ProvePage() {
+function ProveInner() {
   const params = useParams<{ id: string }>();
   const id = Array.isArray(params?.id) ? params.id[0] : params?.id;
 
@@ -103,7 +103,12 @@ export default function ProvePage() {
       setTxId(tx);
       setNotice("Done. The verifier can now see your proof. You can close this page.");
     } catch (e) {
-      setError(errText(e));
+      const msg = errText(e);
+      setError(
+        msg.includes("already answered")
+          ? "This request was already answered. Your proof may already be published: ask the verifier to check their page. If not, ask for a new link."
+          : msg
+      );
       console.error(e);
     } finally {
       setBusy(false);
@@ -170,5 +175,13 @@ export default function ProvePage() {
         )}
       </div>
     </main>
+  );
+}
+
+export default function ProvePage() {
+  return (
+    <Suspense fallback={<p className="p-8 text-sm text-slate-500">Loading...</p>}>
+      <ProveInner />
+    </Suspense>
   );
 }

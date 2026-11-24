@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { walletKey } from "@/lib/wallet-key";
+import { PrivateLettersPromo } from "@/components/dashboard/PrivateLettersCard";
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -90,7 +91,7 @@ export default function RevokeLetterPage() {
           anyone who scans the letter will see it as revoked. This cannot be undone.
         </p>
       </div>
-
+      <PrivateLettersPromo variant="revoke" />
       <form onSubmit={handleRevoke}>
         <Card className="border-slate-200 shadow-sm">
           <CardHeader>

@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, connection } from "next/server";
 import { randomBytes } from "node:crypto";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { errorResponse } from "@/lib/auth-server";
@@ -34,8 +34,10 @@ export async function POST(req: NextRequest) {
       }
     }
     if (claim === "position") {
-      positionHash = typeof body.positionHash === "string" ? body.positionHash.toLowerCase() : "";
-      if (!HEX64.test(positionHash)) return bad("positionHash must be 64 hex characters.");
+      const candidate: string =
+        typeof body.positionHash === "string" ? body.positionHash.toLowerCase() : "";
+      if (!HEX64.test(candidate)) return bad("positionHash must be 64 hex characters.");
+      positionHash = candidate;
     }
 
     const nonce = randomBytes(32).toString("hex");
@@ -54,6 +56,7 @@ export async function POST(req: NextRequest) {
 
 /** GET /api/midnight/verify-requests?id=<uuid>  (public: the employee opens this from the link) */
 export async function GET(req: NextRequest) {
+  await connection(); // read per request, never prerendered at build time
   try {
     const id = req.nextUrl.searchParams.get("id")?.trim() ?? "";
     if (!UUID_REGEX.test(id)) return Response.json({ error: "Invalid request id." }, { status: 400 });

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCompany } from "@/components/dashboard/CompanyProvider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PrivateOverview } from "@/components/dashboard/PrivateLettersCard";
 
 function formatDate(iso: string) {
   const d = new Date(iso);
@@ -49,6 +50,8 @@ export default function AnalyticsPage() {
           </Card>
         ))}
       </div>
+
+      <PrivateOverview />
 
       <Card className="border-slate-200 shadow-sm">
         <CardHeader>

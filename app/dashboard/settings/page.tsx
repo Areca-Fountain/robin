@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { PrivateLettersPromo } from "@/components/dashboard/PrivateLettersCard";
 
 interface Member {
   id: string;
@@ -104,7 +105,7 @@ export default function DashboardSettingsPage() {
           <WalletSetupCard />
         </CardContent>
       </Card>
-
+      <PrivateLettersPromo variant="settings" />
       <Card className="border-slate-200 shadow-sm">
         <CardHeader>
           <CardTitle className="text-lg">Secondary Gmail account</CardTitle>

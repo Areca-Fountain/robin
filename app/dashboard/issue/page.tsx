@@ -15,6 +15,7 @@ import { sha256Hex } from "@/lib/hash";
 import { generateLetterPdf } from "@/lib/letter-pdf";
 import { formatDateOnly, renderTemplate, todayIso } from "@/lib/letter-format";
 import { walletKey } from "@/lib/wallet-key";
+import { PrivateLettersPromo } from "@/components/dashboard/PrivateLettersCard";
 
 const POLL_INTERVAL_MS = 5000;
 const POLL_MAX_TRIES = 36;
@@ -460,7 +461,7 @@ export default function IssueLetterPage() {
           </button>
         </div>
       </div>
-
+      <PrivateLettersPromo variant="issue" />
       {/* Free Plan Limit Banner */}
       {me.company.subscriptionPlan === "Free" && (
         <div
