@@ -59,6 +59,28 @@ export async function deployRobinPrivate(
     txId: deployed.deployTxData.public.txId,
   };
 }
+// SDK 5.x may not expose `.set`; try the known names and log what exists.
+async function writePrivateState(
+  provider: any,
+  stateId: string,
+  state: RobinPrivateState
+) {
+  const names = new Set<string>();
+  for (let o = provider; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+    Object.getOwnPropertyNames(o).forEach((n) => names.add(n));
+  }
+  console.log('[privateStateProvider] methods:', [...names]);
+
+  for (const m of ['set', 'setPrivateState', 'put', 'save']) {
+    if (typeof provider[m] === 'function') {
+      await provider[m](stateId, state);
+      return;
+    }
+  }
+  console.warn(
+    '[privateStateProvider] no write method found; relying on initialPrivateState.'
+  );
+}
 
 async function join(
   wallet: ConnectedMidnightWallet,
@@ -72,7 +94,7 @@ async function join(
   }
   const providers = buildBrowserMidnightProviders(wallet);
   // Write the state BEFORE joining so a stale stored state never wins.
-  await providers.privateStateProvider.set(stateId, state);
+    await writePrivateState(providers.privateStateProvider, stateId, state);
 
   const compiledContract = await loadCompiledContract();
   const deployed = await findDeployedContract(providers, {
