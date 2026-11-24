@@ -53,3 +53,8 @@ next-env.d.ts
 
 /midnight/deployment.json
 robin-midnight-admin-secret.json
+
+# Midnight secrets and credentials: never commit
+robin-*secret*.json
+robin-*issuer*.json
+robin-credential-*.json

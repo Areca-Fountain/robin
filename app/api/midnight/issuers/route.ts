@@ -50,6 +50,7 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/midnight/issuers
+ *  - action "status"          (company): returns its own issuer row
  *  - action "enroll"          (company): saves its issuerId as `pending`
  *  - action "confirm_onchain" (admin):   marks it `registered` after registerIssuer succeeded
  */
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const { action, companyId, issuerId, midnightAddress, registeredTx } = body as {
-      action?: "enroll" | "confirm_onchain";
+      action?: "status" | "enroll" | "confirm_onchain";
       companyId?: string;
       issuerId?: string;
       midnightAddress?: string;
@@ -66,8 +67,22 @@ export async function POST(req: NextRequest) {
 
     const supabase = getSupabaseAdmin();
 
+    if (action === "status") {
+      const company = await requireCompany(req);
+      const { data, error } = await supabase
+        .from("mn_issuers")
+        .select(COLUMNS)
+        .eq("company_id", company.companyId)
+        .maybeSingle();
+      if (error) throw error;
+      return Response.json({ issuer: data ?? null });
+    }
+
     if (action === "enroll") {
       const company = await requireCompany(req);
+      if (company.role === "team") {
+        return Response.json({ error: "Only the primary account can enroll the issuer key." }, { status: 403 });
+      }
       if (companyId && companyId !== company.companyId) {
         return Response.json({ error: "Forbidden" }, { status: 403 });
       }

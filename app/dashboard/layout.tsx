@@ -12,6 +12,7 @@ const NAV = [
   { href: "/dashboard/ai", label: "Generate with Robin AI", owner: false }, 
   { href: "/dashboard", label: "Analytics", owner: false },
   { href: "/dashboard/issue", label: "Issue Service Letter", owner: false },
+  { href: "/dashboard/private", label: "Private Letters (Midnight)", owner: false },
   { href: "/dashboard/formats", label: "Manage Formats", owner: false },
   { href: "/dashboard/team", label: "Assign Team", owner: true },
   { href: "/dashboard/verification", label: "Account Verification", owner: false },
