@@ -489,6 +489,7 @@ export default function AdminDashboardPage() {
               {mobileMenuOpen ? "Close" : "Menu"}
             </button>
           </div>
+          <Link href="/admin/midnight" className="mx-3 mt-3 block rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700">Deploy Midnight contract</Link>
           <Link href="/admin/midnight/issuers" className="mx-3 mt-3 block rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 hover:bg-slate-700">Midnight issuers</Link>
           <nav className={`${mobileMenuOpen ? "block" : "hidden"} lg:block p-3 space-y-1.5`}>
             {navItems.map((item) => {

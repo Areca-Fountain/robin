@@ -28,9 +28,17 @@ export interface ConnectedMidnightWallet {
   uris: MidnightServiceUris;
 }
 
+function isConnector(entry: unknown): entry is InitialAPI {
+  return Boolean(entry) && typeof (entry as InitialAPI).connect === 'function';
+}
+
 /**
- * Finds Lace's Midnight connector on window.midnight.
- * Lace exposes `mnLace` or a dynamic UUID entry with name/rdns matching Lace.
+ * Finds a Midnight wallet connector on window.midnight.
+ *
+ * Order:
+ *   1. `mnLace` (Lace's fixed key)
+ *   2. an entry whose name/rdns looks like Lace or 1AM
+ *   3. the first entry that has a connect() function (any other wallet)
  */
 export function findLaceMidnightConnector(): {
   key: string;
@@ -38,12 +46,15 @@ export function findLaceMidnightConnector(): {
 } | null {
   if (typeof window === 'undefined' || !window.midnight) return null;
 
-  if (window.midnight.mnLace) {
+  const entries = Object.entries(window.midnight).filter(([, entry]) =>
+    isConnector(entry)
+  );
+
+  if (isConnector(window.midnight.mnLace)) {
     return { key: 'mnLace', connector: window.midnight.mnLace };
   }
 
-    for (const [key, entry] of Object.entries(window.midnight)) {
-    if (!entry || typeof entry.connect !== 'function') continue;
+  for (const [key, entry] of entries) {
     const name = (entry.name || '').toLowerCase();
     const rdns = ((entry as unknown as { rdns?: string }).rdns || '').toLowerCase();
     if (name.includes('lace') || rdns === 'io.lace.wallet' || name.includes('1am')) {
@@ -51,11 +62,21 @@ export function findLaceMidnightConnector(): {
     }
   }
 
+  // Any other wallet that follows the DApp Connector API.
+  if (entries.length > 0) {
+    const [key, connector] = entries[0];
+    return { key, connector };
+  }
+
   return null;
 }
 
 /**
- * Connects to Lace Midnight on Preprod and returns wallet addresses + service URIs.
+ * Connects to the Midnight wallet on Preprod and returns wallet addresses + service URIs.
+ *
+ * Proof server: the private inputs of every proof (admin secret, issuer secret,
+ * employee credential) are sent to the proof server. So NEXT_PUBLIC_MIDNIGHT_PROVER_URI
+ * (your own local server) is used first. The wallet's own prover is only a fallback.
  */
 export async function connectLaceMidnight(
   networkId: string = MIDNIGHT_NETWORK_ID
@@ -63,7 +84,7 @@ export async function connectLaceMidnight(
   const found = findLaceMidnightConnector();
   if (!found) {
     throw new Error(
-      'Lace Midnight wallet not detected. Install or update Lace 2.x in Chrome/Edge and enable Midnight.'
+      'No Midnight wallet detected. Install or update Lace 2.x (or 1AM) in Chrome/Edge and enable Midnight.'
     );
   }
 
@@ -76,9 +97,21 @@ export async function connectLaceMidnight(
   const unshielded = await api.getUnshieldedAddress();
   const dust = await api.getDustAddress();
 
+  const envProver = process.env.NEXT_PUBLIC_MIDNIGHT_PROVER_URI || '';
+  const proverServerUri =
+    envProver || config.proverServerUri || defaults.proverServerUri;
+
+  if (!envProver && config.proverServerUri) {
+    console.warn(
+      '[midnight] NEXT_PUBLIC_MIDNIGHT_PROVER_URI is not set, so proofs go to the wallet\'s prover:',
+      config.proverServerUri.split('?')[0],
+      '. Set it to http://localhost:6300 to keep private inputs on your own machine.'
+    );
+  }
+
   return {
     walletKey: found.key,
-    walletName: found.connector.name || 'Lace',
+    walletName: found.connector.name || 'Midnight wallet',
     api,
     shieldedAddress: shielded.shieldedAddress,
     unshieldedAddress: unshielded.unshieldedAddress,
@@ -88,7 +121,7 @@ export async function connectLaceMidnight(
     uris: {
       indexerUri: config.indexerUri || defaults.indexerUri,
       indexerWsUri: config.indexerWsUri || defaults.indexerWsUri,
-      proverServerUri: config.proverServerUri || defaults.proverServerUri,
+      proverServerUri,
       substrateNodeUri: config.substrateNodeUri || defaults.substrateNodeUri,
     },
   };
