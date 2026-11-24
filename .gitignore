@@ -47,3 +47,5 @@ next-env.d.ts
 .vscode/*
 !.vscode/extensions.json
 .idea
+/midnight/managed/
+/public/midnight/managed/
