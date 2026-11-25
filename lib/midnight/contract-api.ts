@@ -17,6 +17,23 @@ import {
 
 const PRIVATE_STATE_ID = 'robin-private-contract-v1';
 
+/**
+ * The v5 private-state provider has no `set()` any more, so the private state for
+ * a call is held here and handed to the witnesses directly. Whatever is stored in
+ * the browser database is ignored, so an old stored state can never leak into a call.
+ */
+let activeState: RobinPrivateState | null = null;
+
+const liveWitnesses = Object.fromEntries(
+  Object.entries(witnesses).map(([name, fn]) => [
+    name,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (ctx: any, ...args: any[]) =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (fn as any)({ ...ctx, privateState: activeState ?? ctx.privateState }, ...args),
+  ])
+);
+
 async function loadCompiledContract() {
   const contractModule = await import(
     '../../midnight/managed/robin_private/contract/index.js'
@@ -25,7 +42,8 @@ async function loadCompiledContract() {
     'robin_private',
     contractModule.Contract
   ).pipe(
-    CompiledContract.withWitnesses(witnesses),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    CompiledContract.withWitnesses(liveWitnesses as any),
     CompiledContract.withCompiledFileAssets('/midnight/managed/robin_private')
   );
 }
@@ -40,10 +58,13 @@ export async function joinRobinPrivateContract(
     );
   }
 
-  const providers = buildBrowserMidnightProviders(wallet);
+  const providers = await buildBrowserMidnightProviders(wallet);
   const compiledContract = await loadCompiledContract();
 
-  const deployed = await findDeployedContract(providers, {
+  // The generated contract types are not wired into the SDK generics here,
+  // so the call is cast once instead of at every use.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const deployed: any = await (findDeployedContract as any)(providers, {
     compiledContract,
     contractAddress: MIDNIGHT_CONTRACT_ADDRESS,
     privateStateId: PRIVATE_STATE_ID,
@@ -53,13 +74,33 @@ export async function joinRobinPrivateContract(
   return { deployed, providers };
 }
 
+/** Joins the contract with the given private state, calls one circuit, returns the tx id. */
+async function runCircuit(
+  wallet: ConnectedMidnightWallet,
+  state: RobinPrivateState,
+  circuit: string,
+  ...args: unknown[]
+): Promise<string> {
+  activeState = state;
+  try {
+    const { deployed } = await joinRobinPrivateContract(wallet, state);
+    const tx = await deployed.callTx[circuit](...args);
+    return tx.public.txId as string;
+  } finally {
+    activeState = null;
+  }
+}
+
 export async function callRegisterIssuer(
   wallet: ConnectedMidnightWallet,
   issuerIdHex: string
 ): Promise<string> {
-  const { deployed } = await joinRobinPrivateContract(wallet);
-  const tx = await deployed.callTx.registerIssuer(hexToBytes32(issuerIdHex));
-  return tx.public.txId;
+  return runCircuit(
+    wallet,
+    createEmptyPrivateState(),
+    'registerIssuer',
+    hexToBytes32(issuerIdHex)
+  );
 }
 
 export async function callIssueLetter(
@@ -69,12 +110,7 @@ export async function callIssueLetter(
 ): Promise<string> {
   const state = createEmptyPrivateState();
   state.issuerSecret = hexToBytes32(issuerSecretHex);
-
-  const { deployed, providers } = await joinRobinPrivateContract(wallet, state);
-  await providers.privateStateProvider.set(PRIVATE_STATE_ID, state);
-
-  const tx = await deployed.callTx.issueLetter(hexToBytes32(commitmentHex));
-  return tx.public.txId;
+  return runCircuit(wallet, state, 'issueLetter', hexToBytes32(commitmentHex));
 }
 
 export async function callRevokeLetter(
@@ -84,12 +120,7 @@ export async function callRevokeLetter(
 ): Promise<string> {
   const state = createEmptyPrivateState();
   state.issuerSecret = hexToBytes32(issuerSecretHex);
-
-  const { deployed, providers } = await joinRobinPrivateContract(wallet, state);
-  await providers.privateStateProvider.set(PRIVATE_STATE_ID, state);
-
-  const tx = await deployed.callTx.revokeLetter(hexToBytes32(commitmentHex));
-  return tx.public.txId;
+  return runCircuit(wallet, state, 'revokeLetter', hexToBytes32(commitmentHex));
 }
 
 export async function callProveClaim(
@@ -111,27 +142,21 @@ export async function callProveClaim(
     salt: hexToBytes32(credential.salt),
   };
 
-  const { deployed, providers } = await joinRobinPrivateContract(wallet, state);
-  await providers.privateStateProvider.set(PRIVATE_STATE_ID, state);
-
   const nonceBytes = hexToBytes32(nonceHex);
 
   if (claim.type === 'employment') {
-    const tx = await deployed.callTx.proveVerifiedEmployment(nonceBytes);
-    return tx.public.txId;
+    return runCircuit(wallet, state, 'proveVerifiedEmployment', nonceBytes);
   }
 
   if (claim.type === 'tenure') {
-    const tx = await deployed.callTx.proveMinTenure(
-      nonceBytes,
-      BigInt(claim.minDays)
-    );
-    return tx.public.txId;
+    return runCircuit(wallet, state, 'proveMinTenure', nonceBytes, BigInt(claim.minDays));
   }
 
-  const tx = await deployed.callTx.provePosition(
+  return runCircuit(
+    wallet,
+    state,
+    'provePosition',
     nonceBytes,
     hexToBytes32(claim.positionHashHex)
   );
-  return tx.public.txId;
 }

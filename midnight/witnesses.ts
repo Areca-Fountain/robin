@@ -14,8 +14,8 @@ export function createEmptyPrivateState(): RobinPrivateState {
     employeeNameHash: new Uint8Array(32),
     nicHash: new Uint8Array(32),
     positionHash: new Uint8Array(32),
-    startDay: 0n,
-    endDay: 0n,
+    startDay: BigInt(0),
+    endDay: BigInt(0),
     salt: new Uint8Array(32),
   };
 }

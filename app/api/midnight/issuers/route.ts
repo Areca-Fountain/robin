@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-admin';
-import { requireAdmin, requireCompany } from '@/lib/auth-server';
+import { requireAdmin, requireCompany, errorResponse } from '@/lib/auth-server';
 
 export async function GET(req: NextRequest) {
   const companyId = req.nextUrl.searchParams.get('companyId');
@@ -23,76 +23,77 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
-  const { action, companyId, issuerId, midnightAddress, registeredTx } = body as {
-    action: 'enroll' | 'confirm_onchain';
-    companyId: string;
-    issuerId?: string;
-    midnightAddress?: string;
-    registeredTx?: string;
-  };
+  try {
+    const body = await req.json();
+    const { action, companyId, issuerId, midnightAddress, registeredTx } = body as {
+      action: 'enroll' | 'confirm_onchain';
+      companyId: string;
+      issuerId?: string;
+      midnightAddress?: string;
+      registeredTx?: string;
+    };
 
-  if (!companyId) {
-    return NextResponse.json({ error: 'companyId is required' }, { status: 400 });
-  }
-
-  const supabase = getSupabaseAdmin();
-
-  if (action === 'enroll') {
-    const companyAuth = await requireCompany(req);
-    if ('error' in companyAuth || companyAuth.company.id !== companyId) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-    if (!issuerId || !/^[0-9a-f]{64}$/i.test(issuerId)) {
-      return NextResponse.json({ error: 'Invalid 64-hex issuerId' }, { status: 400 });
+    if (!companyId) {
+      return NextResponse.json({ error: 'companyId is required' }, { status: 400 });
     }
 
-    const { data, error } = await supabase
-      .from('mn_issuers')
-      .upsert(
-        {
-          company_id: companyId,
-          issuer_id: issuerId.toLowerCase(),
-          midnight_address: midnightAddress || null,
-          status: 'pending',
+    const supabase = getSupabaseAdmin();
+
+    if (action === 'enroll') {
+      const company = await requireCompany(req);
+      if (company.companyId !== companyId) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+      if (!issuerId || !/^[0-9a-f]{64}$/i.test(issuerId)) {
+        return NextResponse.json({ error: 'Invalid 64-hex issuerId' }, { status: 400 });
+      }
+
+      const { data, error } = await supabase
+        .from('mn_issuers')
+        .upsert(
+          {
+            company_id: companyId,
+            issuer_id: issuerId.toLowerCase(),
+            midnight_address: midnightAddress || null,
+            status: 'pending',
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'company_id' }
+        )
+        .select()
+        .single();
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      return NextResponse.json({ issuer: data });
+    }
+
+    if (action === 'confirm_onchain') {
+      await requireAdmin(req);
+      if (!registeredTx) {
+        return NextResponse.json({ error: 'registeredTx is required' }, { status: 400 });
+      }
+
+      const { data, error } = await supabase
+        .from('mn_issuers')
+        .update({
+          registered_tx: registeredTx,
+          status: 'registered',
           updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'company_id' }
-      )
-      .select()
-      .single();
+        })
+        .eq('company_id', companyId)
+        .select()
+        .single();
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      return NextResponse.json({ issuer: data });
     }
-    return NextResponse.json({ issuer: data });
+
+    return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+  } catch (err) {
+    return errorResponse(err, 'Midnight issuer request failed');
   }
-
-  if (action === 'confirm_onchain') {
-    const adminAuth = await requireAdmin(req);
-    if ('error' in adminAuth) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
-    }
-    if (!registeredTx) {
-      return NextResponse.json({ error: 'registeredTx is required' }, { status: 400 });
-    }
-
-    const { data, error } = await supabase
-      .from('mn_issuers')
-      .update({
-        registered_tx: registeredTx,
-        status: 'registered',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('company_id', companyId)
-      .select()
-      .single();
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-    return NextResponse.json({ issuer: data });
-  }
-
-  return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
 }
