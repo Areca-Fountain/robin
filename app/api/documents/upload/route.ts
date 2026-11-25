@@ -1,27 +1,14 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { authenticate, resolveAccount, errorResponse, AuthError } from "@/lib/auth-server";
+import { authenticate, resolveAccount, requireCompany, errorResponse, AuthError } from "@/lib/auth-server";
 import { DOCUMENT_BUCKET } from "@/lib/documents-server";
-
-/**
- * POST /api/documents/upload   (multipart form: file + purpose)
- *
- * The ONLY way a document gets into storage. The bucket is private, so the
- * browser cannot upload or read directly any more.
- *
- *  - Company self-registration has no login yet, so purposes "br-docs" and
- *    "letters" are open to anyone (size, type and rate limited).
- *  - Registrar purposes ("auth-letters", "br-documents", "registrar-kyc") need a
- *    signed-in registrar. Their files are stored under registrar/<userId>/ so
- *    ownership is clear later.
- *
- * Returns { path }. Save that path in the database (not a URL).
- */
 
 // Vercel rejects request bodies above ~4.5 MB, so stay under that
 const MAX_BYTES = 4 * 1024 * 1024;
+const MAX_LETTERHEAD_BYTES = 500 * 1024; // 500 KB
 
 const PUBLIC_PURPOSES = new Set(["br-docs", "letters"]);
 const REGISTRAR_PURPOSES = new Set(["auth-letters", "br-documents", "registrar-kyc"]);
+const COMPANY_PURPOSES = new Set(["company-letterheads"]);
 
 /** Decides the real file type from the first bytes, not from the file name */
 function sniff(bytes: Uint8Array): { ext: string; mime: string } | null {
@@ -32,8 +19,6 @@ function sniff(bytes: Uint8Array): { ext: string; mime: string } | null {
   return null;
 }
 
-// Best-effort limit for anonymous uploads: 10 files per 10 minutes per IP.
-// (In-memory, so on serverless hosting it resets now and then. It is a speed bump, not a wall.)
 const hits = new Map<string, number[]>();
 function tooMany(ip: string): boolean {
   const now = Date.now();
@@ -62,7 +47,14 @@ export async function POST(req: Request) {
     const purpose = String(form.get("purpose") ?? "");
     if (!(file instanceof File)) return bad("Choose a file to upload.");
     if (file.size === 0) return bad("That file is empty.");
-    if (file.size > MAX_BYTES) return bad("The file is too large. The limit is 4 MB.", 413);
+
+    if (COMPANY_PURPOSES.has(purpose)) {
+      if (file.size > MAX_LETTERHEAD_BYTES) {
+        return bad("Letterhead PDF is too large. Maximum allowed size is 500 KB.", 413);
+      }
+    } else if (file.size > MAX_BYTES) {
+      return bad("The file is too large. The limit is 4 MB.", 413);
+    }
 
     let prefix: string;
     if (PUBLIC_PURPOSES.has(purpose)) {
@@ -75,6 +67,9 @@ export async function POST(req: Request) {
         throw new AuthError("Only registrar accounts can upload these documents.", 403, account.role);
       }
       prefix = `registrar/${account.user.id}/${purpose}`;
+    } else if (COMPANY_PURPOSES.has(purpose)) {
+      const ctx = await requireCompany(req);
+      prefix = `company/${ctx.companyId}/letterheads`;
     } else {
       return bad("Unknown upload type.");
     }
@@ -82,6 +77,10 @@ export async function POST(req: Request) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const type = sniff(bytes);
     if (!type) return bad("Only PDF, PNG or JPG files are allowed.", 415);
+
+    if (COMPANY_PURPOSES.has(purpose) && type.ext !== "pdf") {
+      return bad("Company letterhead must be a valid PDF file.", 415);
+    }
 
     const path = `${prefix}/${crypto.randomUUID()}.${type.ext}`;
     const { error } = await getSupabaseAdmin()

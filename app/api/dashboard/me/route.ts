@@ -18,7 +18,7 @@ export async function POST(req: Request) {
       await Promise.all([
         supabase
           .from("company_applications")
-          .select("subscription_plan, subscription_status")
+          .select("subscription_plan, subscription_status, letterhead_url, letterheads")
           .eq("id", ctx.companyId)
           .maybeSingle(),
         supabase
@@ -46,10 +46,10 @@ export async function POST(req: Request) {
           .eq("role", "team"),
         supabase
           .from("letters")
-          .select("id, employee_name, position, issued_at, tx_hash")
+          .select("id, employee_name, position, work_status, revoked_at, issued_at, tx_hash")
           .eq("company_id", ctx.companyId)
           .order("issued_at", { ascending: false })
-          .limit(8),
+          .limit(250),
       ]);
 
     for (const r of [companyRow, letters, thisMonth, formats, generated, members, recent]) {
@@ -59,6 +59,10 @@ export async function POST(req: Request) {
     const plan =
       companyRow.data?.subscription_plan === "Premium" ? "Premium" : "Free";
     const totalLetters = letters.count ?? 0;
+
+    const rawLetterheads = Array.isArray(companyRow.data?.letterheads)
+      ? companyRow.data.letterheads
+      : [];
 
     return Response.json({
       email: ctx.email,
@@ -74,6 +78,8 @@ export async function POST(req: Request) {
         subscriptionStatus: companyRow.data?.subscription_status ?? "Active",
         freeLetterLimit: 5,
         remainingFreeLetters: plan === "Free" ? Math.max(0, 5 - totalLetters) : null,
+        letterheadUrl: (companyRow.data?.letterhead_url as string | null) ?? null,
+        letterheads: rawLetterheads,
       },
       stats: {
         letters: totalLetters,
@@ -86,6 +92,8 @@ export async function POST(req: Request) {
         id: l.id as string,
         employeeName: l.employee_name as string,
         position: l.position as string | null,
+        workStatus: (l.work_status as "active" | "resigned" | null) ?? null,
+        revokedAt: (l.revoked_at as string | null) ?? null,
         issuedAt: l.issued_at as string,
         txHash: l.tx_hash as string,
       })),

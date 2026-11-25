@@ -15,6 +15,7 @@ import { sha256Hex } from "@/lib/hash";
 import { generateLetterPdf } from "@/lib/letter-pdf";
 import { formatDateOnly, renderTemplate, todayIso } from "@/lib/letter-format";
 import { walletKey } from "@/lib/wallet-key";
+import { fetchLetterheadBytes } from "@/lib/documents-client";
 import { PrivateLettersPromo } from "@/components/dashboard/PrivateLettersCard";
 
 const POLL_INTERVAL_MS = 5000;
@@ -36,6 +37,7 @@ interface PendingRecord {
   employeeName: string;
   position: string;
   formatId: string;
+  workStatus: "active" | "resigned";
   fileName: string;
   blobUrl: string;
   verifyUrl: string;
@@ -77,6 +79,7 @@ export default function IssueLetterPage() {
   const [formats, setFormats] = useState<Format[]>([]);
   const [formatsLoading, setFormatsLoading] = useState(true);
   const [formatId, setFormatId] = useState("");
+  const [selectedLetterheadId, setSelectedLetterheadId] = useState<string>("");
 
   const [connecting, setConnecting] = useState(false);
   const [walletAddress, setWalletAddress] = useState("");
@@ -120,6 +123,11 @@ export default function IssueLetterPage() {
   }, [authFetch]);
 
   const format = formats.find((f) => f.id === formatId) ?? null;
+  const letterheads = me?.company.letterheads ?? [];
+  const activeLetterhead =
+    selectedLetterheadId === "none"
+      ? null
+      : letterheads.find((lh) => lh.id === selectedLetterheadId) ?? letterheads[0] ?? null;
 
   function buildVars() {
     return {
@@ -202,6 +210,7 @@ export default function IssueLetterPage() {
           employeeName: record.employeeName,
           position: record.position,
           formatId: record.formatId,
+          workStatus: record.workStatus,
         });
         const data = await res.json().catch(() => ({}));
 
@@ -291,6 +300,7 @@ export default function IssueLetterPage() {
       const letterId = crypto.randomUUID();
       const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || window.location.origin).replace(/\/+$/, "");
       const verifyUrl = `${baseUrl}/verify/${letterId}`;
+      const letterheadPdfBytes = await fetchLetterheadBytes(activeLetterhead?.path ?? null);
 
       const pdfBytes = await generateLetterPdf({
         letterId,
@@ -301,12 +311,14 @@ export default function IssueLetterPage() {
         signerTitle: format.signerTitle,
         issueDate: todayIso(),
         verifyUrl,
+        letterheadPdfBytes,
       });
 
       const blob = new Blob([new Uint8Array(pdfBytes)], { type: "application/pdf" });
       const letterHash = await sha256Hex(blob);
       const blobUrl = URL.createObjectURL(blob);
       const fileName = `service-letter-${slug(employeeName)}.pdf`;
+      const workStatus = stillEmployed ? "active" : "resigned";
 
       setStep("sign");
       const { wallet } = await getFreshLaceWallet();
@@ -321,6 +333,7 @@ export default function IssueLetterPage() {
         employeeName: employeeName.trim(),
         position: position.trim(),
         formatId: format.id,
+        workStatus,
         fileName,
         blobUrl,
         verifyUrl,
@@ -461,7 +474,9 @@ export default function IssueLetterPage() {
           </button>
         </div>
       </div>
+
       <PrivateLettersPromo variant="issue" />
+
       {/* Free Plan Limit Banner */}
       {me.company.subscriptionPlan === "Free" && (
         <div
@@ -523,6 +538,7 @@ export default function IssueLetterPage() {
       ) : mode === "bulk" ? (
         <BulkIssueSection
           companyName={me.company.name}
+          letterheads={letterheads}
           formats={formats}
           walletAddress={walletAddress}
           connecting={connecting}
@@ -568,20 +584,39 @@ export default function IssueLetterPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <fieldset disabled={busy} className="space-y-4">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="format">Format</Label>
-                    <select
-                      id="format"
-                      value={formatId}
-                      onChange={(e) => setFormatId(e.target.value)}
-                      className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                    >
-                      {formats.map((f) => (
-                        <option key={f.id} value={f.id}>
-                          {f.name}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="format">Format *</Label>
+                      <select
+                        id="format"
+                        value={formatId}
+                        onChange={(e) => setFormatId(e.target.value)}
+                        className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        {formats.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="singleLetterhead">Company Letterhead</Label>
+                      <select
+                        id="singleLetterhead"
+                        value={activeLetterhead?.id ?? "none"}
+                        onChange={(e) => setSelectedLetterheadId(e.target.value)}
+                        className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        {letterheads.map((lh) => (
+                          <option key={lh.id} value={lh.id}>
+                            {lh.name}
+                          </option>
+                        ))}
+                        <option value="none">Default Robin Header (No Letterhead)</option>
+                      </select>
+                    </div>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -627,7 +662,7 @@ export default function IssueLetterPage() {
                   {format && (
                     <p className="mt-1 text-xs text-slate-500">
                       Signed by {format.signerName}, {format.signerTitle}. The PDF also gets a
-                      QR code.
+                      QR code{activeLetterhead ? ` and uses "${activeLetterhead.name}"` : ""}.
                     </p>
                   )}
                 </div>

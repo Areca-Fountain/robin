@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import type { BrowserWallet } from "@meshsdk/core";
+import type { CompanyLetterhead } from "@/components/dashboard/CompanyProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,6 +19,7 @@ import {
 } from "@/components/ui/card";
 import { sha256Hex } from "@/lib/hash";
 import { generateLetterPdf } from "@/lib/letter-pdf";
+import { fetchLetterheadBytes } from "@/lib/documents-client";
 import {
   formatDateOnly,
   renderBulkTemplate,
@@ -57,6 +59,7 @@ interface GeneratedBulkItem {
 
 interface BulkIssueSectionProps {
   companyName: string;
+  letterheads: CompanyLetterhead[];
   formats: ReadyFormat[];
   walletAddress: string;
   connecting: boolean;
@@ -114,6 +117,7 @@ function normalizeExcelDate(raw: unknown): string {
 
 export function BulkIssueSection({
   companyName,
+  letterheads,
   formats,
   walletAddress,
   connecting,
@@ -124,7 +128,13 @@ export function BulkIssueSection({
   onRefreshDashboard,
 }: BulkIssueSectionProps) {
   const [formatId, setFormatId] = useState<string>(formats[0]?.id ?? "");
+  const [selectedLetterheadId, setSelectedLetterheadId] = useState<string>("");
+
   const activeFormat = formats.find((f) => f.id === formatId) ?? formats[0] ?? null;
+  const activeLetterhead =
+    selectedLetterheadId === "none"
+      ? null
+      : letterheads.find((lh) => lh.id === selectedLetterheadId) ?? letterheads[0] ?? null;
 
   // Extra Custom Fields State
   const [extraFields, setExtraFields] = useState<ExtraCustomField[]>([]);
@@ -144,7 +154,6 @@ export function BulkIssueSection({
   const [issuingAllOnChain, setIssuingAllOnChain] = useState(false);
   const [zipDownloading, setZipDownloading] = useState(false);
 
-  // Add Extra Custom Field
   const handleAddExtraField = () => {
     const trimmed = newFieldLabel.trim();
     if (!trimmed) return;
@@ -175,7 +184,6 @@ export function BulkIssueSection({
     setExtraFields((prev) => prev.filter((f) => f.key !== key));
   };
 
-  // Download Excel Template (.xlsx) matching selected format + extra fields
   const handleDownloadTemplate = () => {
     if (!activeFormat) return;
 
@@ -209,7 +217,6 @@ export function BulkIssueSection({
       ...(h === "nic" ? { z: "@" } : {}),
     }));
 
-    // Format NIC column (B2:B500) as Plain Text ("@") so Excel never converts 12-digit NICs to 1.99E+11
     for (let row = 2; row <= 500; row++) {
       const cellRef = `B${row}`;
       if (!worksheet[cellRef]) {
@@ -227,7 +234,6 @@ export function BulkIssueSection({
     XLSX.writeFile(workbook, `robin-template-${safeName}.xlsx`);
   };
 
-  // Upload Filled Excel Sheet & Generate All PDFs
   const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !activeFormat) return;
@@ -252,17 +258,16 @@ export function BulkIssueSection({
         throw new Error("The Excel sheet is empty. Add at least one employee row.");
       }
 
-      // Revoke old blob URLs if regenerating
       bulkItems.forEach((item) => URL.revokeObjectURL(item.blobUrl));
 
       const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || window.location.origin).replace(
         /\/+$/,
         ""
       );
+      const letterheadPdfBytes = await fetchLetterheadBytes(activeLetterhead?.path ?? null);
       const generated: GeneratedBulkItem[] = [];
 
       for (let i = 0; i < rows.length; i++) {
-        // Normalize column headers to lowercase_underscore
         const rawRow = rows[i];
         const norm: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(rawRow)) {
@@ -324,6 +329,7 @@ export function BulkIssueSection({
           signerTitle: activeFormat.signerTitle,
           issueDate: todayIso(),
           verifyUrl,
+          letterheadPdfBytes,
         });
 
         const blob = new Blob([new Uint8Array(pdfBytes)], { type: "application/pdf" });
@@ -363,7 +369,6 @@ export function BulkIssueSection({
     }
   };
 
-  // Delete Single Generated Letter from Bulk List
   const handleDeleteBulkItem = (letterId: string) => {
     setBulkItems((prev) => {
       const target = prev.find((item) => item.letterId === letterId);
@@ -375,7 +380,6 @@ export function BulkIssueSection({
     }
   };
 
-  // Download All Generated PDFs as a Single ZIP File
   const handleDownloadAllZip = async () => {
     if (bulkItems.length === 0) return;
     setZipDownloading(true);
@@ -398,7 +402,6 @@ export function BulkIssueSection({
     }
   };
 
-  // Poll server confirmation for a single item
   async function waitForServerConfirmation(
     item: GeneratedBulkItem,
     txHash: string,
@@ -412,6 +415,7 @@ export function BulkIssueSection({
         employeeName: item.employeeName,
         position: item.position,
         formatId: formatIdUsed,
+        workStatus: item.stillEmployed ? "active" : "resigned",
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 200 && data.status === "issued") {
@@ -425,7 +429,6 @@ export function BulkIssueSection({
     throw new Error("Confirmation timed out. Please check again shortly.");
   }
 
-  // Record ALL Unissued Letters in ONE Single Cardano Transaction (Only 1 Lace Popup!)
   const handleIssueAllOnChain = async () => {
     if (!activeFormat) return;
     const pendingItems = bulkItems.filter((item) => item.onChainStatus !== "issued");
@@ -448,13 +451,11 @@ export function BulkIssueSection({
       const { wallet } = await getFreshLaceWallet();
       const { issueBulkLettersOnChain } = await import("@/lib/letter-tx");
 
-      // Single Lace Wallet Approval for ALL pending letters!
       const { txHash } = await issueBulkLettersOnChain(
         wallet,
         pendingItems.map((item) => item.letterHash)
       );
 
-      // Confirm and save each letter in parallel against that single txHash
       await Promise.all(
         pendingItems.map(async (item) => {
           try {
@@ -506,31 +507,50 @@ export function BulkIssueSection({
 
   return (
     <div className="space-y-6">
-      {/* STEP 1: SELECT FORMAT & CUSTOM EXTRA FIELDS */}
+      {/* STEP 1: SELECT FORMAT, LETTERHEAD & CUSTOM EXTRA FIELDS */}
       <Card className="border-slate-200 shadow-sm">
         <CardHeader>
           <CardTitle className="text-lg">
-            1. Choose Format &amp; Add Extra Fields (Optional)
+            1. Choose Format, Letterhead &amp; Extra Fields (Optional)
           </CardTitle>
           <CardDescription>
-            Select a ready format and add any extra columns you want included in the Excel template and service letters.
+            Select a ready format, company letterhead, and any extra columns you want included in the Excel template.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="space-y-1.5">
-            <Label htmlFor="bulkFormat">Ready Letter Format *</Label>
-            <select
-              id="bulkFormat"
-              value={activeFormat?.id ?? ""}
-              onChange={(e) => setFormatId(e.target.value)}
-              className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            >
-              {formats.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </select>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="bulkFormat">Ready Letter Format *</Label>
+              <select
+                id="bulkFormat"
+                value={activeFormat?.id ?? ""}
+                onChange={(e) => setFormatId(e.target.value)}
+                className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                {formats.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="bulkLetterhead">Company Letterhead</Label>
+              <select
+                id="bulkLetterhead"
+                value={activeLetterhead?.id ?? "none"}
+                onChange={(e) => setSelectedLetterheadId(e.target.value)}
+                className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                {letterheads.map((lh) => (
+                  <option key={lh.id} value={lh.id}>
+                    {lh.name}
+                  </option>
+                ))}
+                <option value="none">Default Robin Header (No Letterhead)</option>
+              </select>
+            </div>
           </div>
 
           <Separator />
@@ -651,7 +671,7 @@ export function BulkIssueSection({
         </CardContent>
       </Card>
 
-      {/* STEP 3: GENERATED BULK LETTERS LIST (PREVIEW, DOWNLOAD, DELETE, DOWNLOAD ALL, CARDANO) */}
+      {/* STEP 3: GENERATED BULK LETTERS LIST */}
       {bulkItems.length > 0 && (
         <Card className="border-slate-200 shadow-sm">
           <CardHeader className="flex flex-col md:flex-row md:items-center justify-between gap-4">

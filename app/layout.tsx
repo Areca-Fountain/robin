@@ -1,5 +1,5 @@
-import { Suspense } from "react";
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/layout/Navbar";
@@ -30,7 +30,8 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <Suspense fallback={null}>
+        {/* Navbar reads the URL (usePathname), so it must stream in behind Suspense. */}
+        <Suspense fallback={<div className="h-16" aria-hidden />}>
           <Navbar />
         </Suspense>
         {children}

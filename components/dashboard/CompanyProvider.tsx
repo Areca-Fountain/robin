@@ -13,6 +13,13 @@ import { supabase } from "@/lib/supabase";
 
 export type CompanyRole = "primary" | "secondary" | "team";
 
+export interface CompanyLetterhead {
+  id: string;
+  name: string;
+  path: string;
+  createdAt: string;
+}
+
 export interface Me {
   email: string;
   role: CompanyRole;
@@ -27,6 +34,8 @@ export interface Me {
     subscriptionStatus: string;
     freeLetterLimit: number;
     remainingFreeLetters: number | null;
+    letterheadUrl: string | null;
+    letterheads: CompanyLetterhead[];
   };
   stats: {
     letters: number;
@@ -39,6 +48,8 @@ export interface Me {
     id: string;
     employeeName: string;
     position: string | null;
+    workStatus: "active" | "resigned" | null;
+    revokedAt: string | null;
     issuedAt: string;
     txHash: string;
   }[];
