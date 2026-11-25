@@ -1,0 +1,8 @@
+{
+  "name": "robin-midnight-contract",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "compile": "compact compile robin_private.compact managed/robin_private"
+  }
+}
