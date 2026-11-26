@@ -11,6 +11,7 @@
   <img alt="Supabase" src="https://img.shields.io/badge/Supabase-3ECF8E?logo=supabase&logoColor=white">
   <img alt="License Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-blue">
 </p>
+<!-- remove this>
 
 <p align="center">
   <b>Issue a letter once. Let anyone verify it in seconds. Let employees share only the facts that matter.</b>
