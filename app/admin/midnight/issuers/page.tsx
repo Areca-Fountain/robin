@@ -14,8 +14,8 @@ import { authedPost } from "@/lib/client-auth";
 import { supabase } from "@/lib/supabase";
 import { connectLaceMidnight } from "@/lib/midnight/lace-connector";
 import { MIDNIGHT_CONTRACT_ADDRESS } from "@/lib/midnight/config";
-import { randomBytes32 } from "../../../../midnight/witnesses";
-import { isHex32, toHex } from "@/lib/midnight/credential";
+import { createIssuerSecret, issuerIdOf } from "@/lib/midnight/company-issuer";
+import { isHex32 } from "@/lib/midnight/credential";
 
 interface IssuerRow {
   company_id: string;
@@ -130,11 +130,10 @@ function RegisterIssuers() {
 
   async function makeTestIssuer() {
     try {
-      const secret = randomBytes32();
-      const mod: any = await import("../../../../midnight/managed/robin_private/contract/index.js");
-      const id: Uint8Array = mod.pureCircuits.issuerIdOf(secret);
-      setTestSecret(toHex(secret));
-      setManualIssuerId(toHex(id));
+      const secretHex = createIssuerSecret();
+      const idHex = await issuerIdOf(secretHex);
+      setTestSecret(secretHex);
+      setManualIssuerId(idHex);
       add("Test issuer created. Download its secret: it is needed to issue letters as this test issuer.");
     } catch (e) {
       add(`ERROR: ${errText(e)}`);

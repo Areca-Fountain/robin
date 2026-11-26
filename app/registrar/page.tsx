@@ -123,6 +123,8 @@ export default function RegistrarDashboardPage() {
 
   // Subscription State
   const [updatingPlan, setUpdatingPlan] = useState(false);
+  const [cancellingPlan, setCancellingPlan] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
 
   // Helper: upload through our server (the storage bucket is private).
   // Returns the storage path to save in the database.
@@ -664,7 +666,7 @@ export default function RegistrarDashboardPage() {
   };
 
   // =========================================================================
-  // 5. MANAGE SUBSCRIPTION VIA PAYHERE POPUP SDK ($10/MONTH PREMIUM)
+  // 5. MANAGE SUBSCRIPTION VIA PAYHERE POPUP SDK ($10/MONTH PREMIUM) & CANCEL
   // =========================================================================
   const handleUpgradeViaPayHere = async () => {
     if (!user) return;
@@ -740,6 +742,49 @@ export default function RegistrarDashboardPage() {
       const msg = err instanceof Error ? err.message : "Failed to start PayHere payment";
       setFeedback({ type: "error", text: msg });
       setUpdatingPlan(false);
+    }
+  };
+
+  const handleCancelSubscription = async () => {
+    if (!user) return;
+    setCancellingPlan(true);
+    setFeedback(null);
+
+    try {
+      const { error } = await supabase.from("registrar_profiles").upsert(
+        {
+          user_id: user.id,
+          registrar_type: profile.registrar_type,
+          full_name: profile.full_name,
+          private_address: profile.private_address,
+          contact_number: profile.contact_number,
+          nic_or_br_number: profile.nic_or_br_number,
+          verification_doc_url: profile.verification_doc_url,
+          verification_status: profile.verification_status,
+          subscription_plan: "Free",
+          subscription_status: "Cancelled",
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+
+      if (error) throw error;
+
+      setProfile((prev) => ({
+        ...prev,
+        subscription_plan: "Free",
+        subscription_status: "Cancelled",
+      }));
+      setShowCancelModal(false);
+      setFeedback({
+        type: "success",
+        text: "Your Premium Plan subscription has been cancelled. Your account has been switched back to the Free Plan (up to 5 company registrations).",
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to cancel subscription";
+      setFeedback({ type: "error", text: msg });
+    } finally {
+      setCancellingPlan(false);
     }
   };
 
@@ -1482,7 +1527,7 @@ export default function RegistrarDashboardPage() {
           </Card>
         )}
 
-        {/* SECTION 5: MANAGE SUBSCRIPTION (PAYHERE POPUP SDK $10/MO) */}
+        {/* SECTION 5: MANAGE SUBSCRIPTION (PAYHERE POPUP SDK $10/MO & CANCEL) */}
         {activeSection === "manage-subscription" && (
           <div className="space-y-6">
             <Card>
@@ -1553,24 +1598,78 @@ export default function RegistrarDashboardPage() {
                     <li>✓ Priority verification queue for client companies</li>
                     <li>✓ Full registrar audit &amp; status tracking</li>
                   </ul>
-                  <Button
-                    type="button"
-                    className="w-full bg-indigo-600 hover:bg-indigo-700"
-                    disabled={profile.subscription_plan === "Premium" || updatingPlan}
-                    onClick={handleUpgradeViaPayHere}
-                  >
-                    {profile.subscription_plan === "Premium"
-                      ? "Active Plan ✓"
-                      : updatingPlan
-                      ? "Opening PayHere..."
-                      : "Upgrade with PayHere ($10/mo)"}
-                  </Button>
+                  {profile.subscription_plan === "Premium" ? (
+                    <div className="space-y-2">
+                      <Button
+                        type="button"
+                        className="w-full bg-emerald-600 hover:bg-emerald-600 text-white cursor-default"
+                        disabled
+                      >
+                        Active Plan ✓
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                        disabled={cancellingPlan}
+                        onClick={() => setShowCancelModal(true)}
+                      >
+                        {cancellingPlan ? "Cancelling..." : "Cancel Premium Plan"}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      className="w-full bg-indigo-600 hover:bg-indigo-700"
+                      disabled={updatingPlan}
+                      onClick={handleUpgradeViaPayHere}
+                    >
+                      {updatingPlan ? "Opening PayHere..." : "Upgrade with PayHere ($10/mo)"}
+                    </Button>
+                  )}
                 </CardContent>
               </Card>
             </div>
           </div>
         )}
       </main>
+
+      {/* Cancel Subscription Confirmation Modal */}
+      {showCancelModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-red-200">
+            <div className="space-y-2">
+              <h3 className="text-lg font-bold text-slate-900">Cancel Premium Plan?</h3>
+              <p className="text-sm text-slate-600 leading-relaxed">
+                Are you sure you want to cancel your <strong>Premium Plan ($10/month)</strong> and revert to the <strong>Free Plan</strong>?
+              </p>
+              {applications.length > 5 && (
+                <div className="bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded-lg text-xs">
+                  You currently have <strong>{applications.length}</strong> company registrations. Your existing submissions will remain safe, but you won&apos;t be able to add new submissions on the Free Plan (5 limit) unless you upgrade again.
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={cancellingPlan}
+                onClick={() => setShowCancelModal(false)}
+              >
+                Keep Premium
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={cancellingPlan}
+                onClick={handleCancelSubscription}
+              >
+                {cancellingPlan ? "Cancelling..." : "Confirm Cancellation"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Under Review Popup Modal */}
       {reviewPopup && (

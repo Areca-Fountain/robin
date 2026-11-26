@@ -29,11 +29,18 @@ const COMPANY_STATE_ID = 'robin-company-state';
 const EMPLOYEE_STATE_ID = 'robin-employee-state';
 
 async function loadCompiledContract() {
-  const contractModule = await import(
-    '../../midnight/managed/robin_private/contract/index.js'
-  );
+  let contractModule: any;
+  try {
+    const modulePath = ['..', '..', 'midnight', 'managed', 'robin_private', 'contract', 'index.js'].join('/');
+    contractModule = await import(/* webpackIgnore: true */ modulePath);
+  } catch {
+    throw new Error(
+      'Midnight contract artifact not found (midnight/managed/robin_private). Run "npm run compile:fast" inside the midnight/ folder.'
+    );
+  }
+
   return CompiledContract.make('robin_private', contractModule.Contract).pipe(
-    CompiledContract.withWitnesses(witnesses),
+    CompiledContract.withWitnesses(witnesses as never),
     CompiledContract.withCompiledFileAssets('/midnight/managed/robin_private')
   );
 }
@@ -59,6 +66,7 @@ export async function deployRobinPrivate(
     txId: deployed.deployTxData.public.txId,
   };
 }
+
 // SDK 5.x may not expose `.set`; try the known names and log what exists.
 async function writePrivateState(
   provider: any,
@@ -94,7 +102,7 @@ async function join(
   }
   const providers = buildBrowserMidnightProviders(wallet);
   // Write the state BEFORE joining so a stale stored state never wins.
-    await writePrivateState(providers.privateStateProvider, stateId, state);
+  await writePrivateState(providers.privateStateProvider, stateId, state);
 
   const compiledContract = await loadCompiledContract();
   const deployed = await findDeployedContract(providers, {

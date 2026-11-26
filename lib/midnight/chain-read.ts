@@ -14,6 +14,18 @@ function warnOnce(name: string, e: unknown) {
   console.warn('[chain-read] ledger attempt failed:', name, e);
 }
 
+async function loadCompiledContract(): Promise<any> {
+  try {
+    // Variable path prevents Turbopack/Webpack from failing the build when managed/ is gitignored
+    const modulePath = ['..', '..', 'midnight', 'managed', 'robin_private', 'contract', 'index.js'].join('/');
+    return await import(/* webpackIgnore: true */ modulePath);
+  } catch {
+    throw new Error(
+      'Midnight contract artifact not found (midnight/managed/robin_private). Run "npm run compile:fast" inside the midnight/ folder.'
+    );
+  }
+}
+
 /**
  * Fallback: fetch the contract's raw state from the indexer (plain GraphQL over HTTP)
  * and decode it with the SAME runtime copy the compiled contract uses. This avoids the
@@ -46,7 +58,7 @@ async function readLedger(): Promise<any> {
   const provider: any = indexerPublicDataProvider(uris.indexerUri, uris.indexerWsUri);
   const state = await provider.queryContractState(MIDNIGHT_CONTRACT_ADDRESS);
   if (!state) throw new Error('The contract was not found on the Midnight indexer yet.');
-  const mod: any = await import('../../midnight/managed/robin_private/contract/index.js');
+  const mod = await loadCompiledContract();
 
   const attempts: Array<[string, () => Promise<any> | any]> = [
     ['state.data', () => mod.ledger(state.data ?? state)],
