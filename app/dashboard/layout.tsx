@@ -15,6 +15,7 @@ const NAV = [
   { href: "/dashboard/private", label: "Private Letters (Midnight)", owner: false },
   { href: "/dashboard/formats", label: "Manage Formats", owner: false },
   { href: "/dashboard/team", label: "Assign Team", owner: true },
+  { href: "/dashboard/api", label: "API Keys", owner: true },
   { href: "/dashboard/verification", label: "Account Verification", owner: false },
   { href: "/dashboard/subscription", label: "Subscription & Plan", owner: true },
   { href: "/dashboard/settings", label: "Account Settings", owner: true },
