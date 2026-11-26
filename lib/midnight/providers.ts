@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import { MIDNIGHT_NETWORK_ID } from './config';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
@@ -164,7 +164,7 @@ export function buildBrowserMidnightProviders(wallet: ConnectedMidnightWallet) {
     midnightProvider,
     config: {
       networkId: MIDNIGHT_NETWORK_ID,
-      ttlSeconds: 600,
+      ttlSeconds: 1800,
     },
   };
 }
