@@ -1,0 +1,175 @@
+/* GooeyNav – styles for components/ui/GooeyNav.jsx
+   The sliding "gooey" pill is drawn by a WebGL canvas behind the links.
+   A second, clipped copy of the labels (the --active list) sits on top so
+   the label text changes colour exactly where the pill is. */
+
+.gooey-nav {
+  --gn-pad-x: 12px;
+  --gn-pad-y: 6px;
+  --gn-font: 15px;
+  --gn-gap: 2px;
+  --gn-icon: 1.1em;
+
+  position: relative;
+  display: inline-block;
+  isolation: isolate;
+  color: var(--gn-ink);
+  font-size: var(--gn-font);
+  line-height: 1.2;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.gooey-nav *,
+.gooey-nav *::before,
+.gooey-nav *::after {
+  box-sizing: border-box;
+}
+
+.gooey-nav--sm {
+  --gn-pad-x: 10px;
+  --gn-pad-y: 5px;
+  --gn-font: 13px;
+}
+
+.gooey-nav--md {
+  --gn-pad-x: 12px;
+  --gn-pad-y: 6px;
+  --gn-font: 15px;
+}
+
+.gooey-nav--lg {
+  --gn-pad-x: 18px;
+  --gn-pad-y: 10px;
+  --gn-font: 17px;
+}
+
+/* Optional glass capsule around the links (frame prop) */
+.gooey-nav--framed {
+  padding: 6px;
+  border-radius: 999px;
+  background: var(--gn-frame);
+  box-shadow:
+    inset 0 0 0 1px var(--gn-frame-edge),
+    inset 0 1px 0 var(--gn-frame-highlight),
+    var(--gn-frame-shadow);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  backdrop-filter: blur(14px) saturate(1.2);
+}
+
+.gooey-nav__rim {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 1px 0 var(--gn-frame-highlight);
+}
+
+.gooey-nav__stage {
+  position: relative;
+}
+
+/* WebGL canvas – bleeds past the stage so the goo/shadow is never cut off.
+   JS sets left/top/width/height inline. */
+.gooey-nav__canvas {
+  position: absolute;
+  z-index: 0;
+  display: block;
+  pointer-events: none;
+}
+
+/* Plain CSS pill used only when WebGL2 isn't available */
+.gooey-nav__fallback {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  display: none;
+  border-radius: 999px;
+  background: var(--gn-pill);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 0.35s cubic-bezier(0.3, 1.3, 0.5, 1),
+    width 0.35s cubic-bezier(0.3, 1.3, 0.5, 1),
+    opacity 0.2s ease;
+}
+
+.gooey-nav__list {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--gn-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Clipped copy of the labels, painted in the "on pill" ink colour */
+.gooey-nav__list--active {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  color: var(--gn-active-ink);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.gooey-nav__item {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gooey-nav__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: var(--gn-pad-y) var(--gn-pad-x);
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--gn-ink);
+  font: inherit;
+  font-size: var(--gn-font);
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+
+.gooey-nav__list--active .gooey-nav__link {
+  color: inherit;
+  cursor: default;
+}
+
+.gooey-nav__link:focus-visible {
+  outline: 2px solid var(--gn-pill);
+  outline-offset: 2px;
+}
+
+.gooey-nav__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--gn-icon);
+  height: var(--gn-icon);
+  color: var(--gn-muted);
+}
+
+.gooey-nav__list--active .gooey-nav__icon {
+  color: inherit;
+}
+
+.gooey-nav__icon > svg {
+  width: 100%;
+  height: 100%;
+}
+
+.gooey-nav__label {
+  display: inline-block;
+}

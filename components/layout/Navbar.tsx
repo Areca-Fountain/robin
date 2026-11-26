@@ -7,6 +7,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { ChevronDown, Menu, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { fetchAccount, type AccountInfo } from "@/lib/client-auth";
+import GooeyNav from "@/components/ui/GooeyNav";
 
 /* ------------------------------------------------------------------ */
 /* Static links (same for everyone)                                    */
@@ -18,6 +19,14 @@ const LINKS = [
   { href: "/verify-private", label: "Private Verify" },
   { href: "/about", label: "About us" },
 ];
+
+/** Same links, shaped for GooeyNav (no href -> renders buttons, we navigate with the Next router) */
+const GOOEY_ITEMS = LINKS.map((l) => ({ label: l.label }));
+
+/** Exact match, or a sub-route of the link (e.g. /verify/abc123). "/verify-private" does NOT match "/verify". */
+function matchesLink(pathname: string, href: string) {
+  return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(href + "/");
+}
 
 /** The filled pill that points each role to its own portal */
 const DASHBOARD_LABEL = {
@@ -225,8 +234,14 @@ export default function Navbar() {
   const dashboardLabel = role !== "none" ? DASHBOARD_LABEL[role] : null;
 
   function isActive(href: string) {
-    return href === "/" ? pathname === "/" : pathname.startsWith(href);
+    return matchesLink(pathname, href);
   }
+
+  // Which link is the current page? (-1 = none, e.g. /dashboard) -> GooeyNav goes idle (no pill)
+  const activeLink = LINKS.reduce(
+    (best, l, i) => (matchesLink(pathname, l.href) && (best < 0 || l.href.length > LINKS[best].href.length) ? i : best),
+    -1,
+  );
 
   async function signOut() {
     setMobileOpen(false);
@@ -289,11 +304,27 @@ export default function Navbar() {
           </Link>
 
           {/* Desktop links */}
-          <nav aria-label="Main" className="hidden items-center gap-1 lg:flex">
-            {LINKS.map((l) => (
-              <NavLink key={l.href} href={l.href} label={l.label} active={isActive(l.href)} />
-            ))}
-          </nav>
+          <div className="hidden lg:block">
+            <GooeyNav
+              ariaLabel="Main"
+              items={GOOEY_ITEMS}
+              activeIndex={Math.max(0, activeLink)}
+              idle={activeLink < 0}
+              onChange={(index: number) => router.push(LINKS[index].href)}
+              theme="light"
+              color="#0f3d8a"
+              size="md"
+              frame={false}
+              particleCount={15}
+              spread={56}
+              animationTime={600}
+              timeVariance={300}
+              gooeyness={0.5}
+              wobble={0.5}
+              hoverEffect
+              style={{ "--gn-ink": "#0f3d8a" }}
+            />
+          </div>
 
           {/* Desktop actions */}
           <div className="hidden items-center gap-2 lg:flex">{desktopActions}</div>
