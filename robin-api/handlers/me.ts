@@ -20,6 +20,7 @@ export async function GET(req: Request) {
         name: ctx.keyName,
         scopes: ctx.scopes,
       },
+      rateLimit: { perMinute: ctx.rateLimitPerMinute },
     });
   } catch (err) {
     return apiErrorResponse(err);

@@ -2,27 +2,30 @@ import "server-only";
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { hashApiKey, looksLikeApiKey, type ApiScope } from "@/robin-api/keys";
+import { DEFAULT_RATE_LIMIT_PER_MIN } from "@/robin-api/spec";
 
 /** An error that is safe to show an API caller */
 export class ApiError extends Error {
   code: string;
   status: number;
-  constructor(code: string, message: string, status: number) {
+  /** Extra response headers, for example Retry-After */
+  headers?: Record<string, string>;
+  constructor(code: string, message: string, status: number, headers?: Record<string, string>) {
     super(message);
     this.code = code;
     this.status = status;
+    this.headers = headers;
   }
 }
 
 /** Every /api/v1 error uses this one shape: { error: { code, message } } */
 export function apiErrorResponse(err: unknown) {
   if (err instanceof ApiError) {
+    const headers: Record<string, string> = { ...(err.headers ?? {}) };
+    if (err.status === 401) headers["WWW-Authenticate"] = "Bearer";
     return Response.json(
       { error: { code: err.code, message: err.message } },
-      {
-        status: err.status,
-        headers: err.status === 401 ? { "WWW-Authenticate": "Bearer" } : undefined,
-      }
+      { status: err.status, headers: Object.keys(headers).length ? headers : undefined }
     );
   }
   console.error("API error:", err);
@@ -44,12 +47,60 @@ export interface ApiContext {
   verified: boolean;
   /** Wallet address saved when the company registered */
   walletAddress: string;
+  /** Calls allowed per minute for this key */
+  rateLimitPerMinute: number;
+}
+
+/** What the logging wrapper (robin-api/log.ts) needs to know about a request */
+export interface RequestMeta {
+  companyId: string;
+  keyId: string;
+  limit: number;
+  /** Calls already made in the last minute, before this one */
+  used: number;
+}
+
+const metaByRequest = new WeakMap<Request, RequestMeta>();
+
+export function getRequestMeta(req: Request): RequestMeta | undefined {
+  return metaByRequest.get(req);
+}
+
+/** Calls per minute per key. Change with ROBIN_API_RATE_LIMIT_PER_MIN in .env.local */
+export function rateLimitPerMinute(): number {
+  const n = Number(process.env.ROBIN_API_RATE_LIMIT_PER_MIN);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_RATE_LIMIT_PER_MIN;
 }
 
 function readKey(req: Request): string {
   const auth = req.headers.get("authorization") ?? "";
   if (auth.toLowerCase().startsWith("bearer ")) return auth.slice(7).trim();
   return (req.headers.get("x-api-key") ?? "").trim();
+}
+
+/**
+ * Counts this key's calls in the last 60 seconds (429 answers are not counted).
+ * If the log table is missing or the query fails, rate limiting is skipped instead of
+ * breaking the whole API.
+ */
+async function countRecentCalls(keyId: string): Promise<number> {
+  try {
+    const since = new Date(Date.now() - 60_000).toISOString();
+    const { count, error } = await getSupabaseAdmin()
+      .from("api_request_logs")
+      .select("id", { count: "exact", head: true })
+      .eq("key_id", keyId)
+      .neq("status", 429)
+      .gte("created_at", since);
+    if (error) {
+      console.warn("Rate limit check skipped:", error.message);
+      return 0;
+    }
+    return count ?? 0;
+  } catch (err) {
+    console.warn("Rate limit check skipped:", err);
+    return 0;
+  }
 }
 
 /**
@@ -82,6 +133,19 @@ export async function requireApiKey(req: Request, scope?: ApiScope): Promise<Api
   }
   if (row.expires_at && new Date(row.expires_at as string).getTime() < Date.now()) {
     throw new ApiError("expired_api_key", "This API key has expired.", 401);
+  }
+
+  // Rate limit: the key is real, so from here on every call is logged and counted
+  const limit = rateLimitPerMinute();
+  const used = await countRecentCalls(row.id as string);
+  metaByRequest.set(req, { companyId: row.company_id as string, keyId: row.id as string, limit, used });
+  if (used >= limit) {
+    throw new ApiError(
+      "rate_limited",
+      `Too many requests. This key may make ${limit} calls per minute. Try again in a few seconds.`,
+      429,
+      { "Retry-After": "10", "X-RateLimit-Limit": String(limit), "X-RateLimit-Remaining": "0" }
+    );
   }
 
   const scopes = (row.scopes ?? []) as string[];
@@ -117,6 +181,7 @@ export async function requireApiKey(req: Request, scope?: ApiScope): Promise<Api
     status: app.status as string,
     verified: app.status === "Verified",
     walletAddress: (app.wallet_address as string) ?? "",
+    rateLimitPerMinute: limit,
   };
 }
 

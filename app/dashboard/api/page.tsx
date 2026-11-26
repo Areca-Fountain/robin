@@ -1,5 +1,5 @@
-import ApiKeysPanel from "@/robin-api/ui/ApiKeysPanel";
+import ApiConsole from "@/robin-api/ui/ApiConsole";
 
 export default function ApiKeysPage() {
-  return <ApiKeysPanel />;
+  return <ApiConsole />;
 }
