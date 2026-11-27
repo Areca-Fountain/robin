@@ -5,7 +5,8 @@
 // `npm run compile` inside /midnight (see the guide).
 
 import type { WitnessContext } from "@midnight-ntwrk/compact-runtime";
-import type { Ledger } from "./managed/robin_private/contract/index.js";
+
+type RobinLedger = Record<string, unknown>;
 
 /**
  * Private state kept on the device (never sent anywhere).
@@ -41,14 +42,14 @@ export function adminPrivateState(adminSecret: Uint8Array): RobinPrivateState {
 export const witnesses = {
   issuerSecret: ({
     privateState,
-  }: WitnessContext<Ledger, RobinPrivateState>): [RobinPrivateState, Uint8Array] => [
+  }: WitnessContext<RobinLedger, RobinPrivateState>): [RobinPrivateState, Uint8Array] => [
     privateState,
     privateState.issuerSecret,
   ],
 
   adminSecret: ({
     privateState,
-  }: WitnessContext<Ledger, RobinPrivateState>): [RobinPrivateState, Uint8Array] => [
+  }: WitnessContext<RobinLedger, RobinPrivateState>): [RobinPrivateState, Uint8Array] => [
     privateState,
     privateState.adminSecret,
   ],

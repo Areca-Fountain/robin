@@ -31,7 +31,14 @@ export function createIssuerSecret(): string {
 }
 
 async function loadContractModule(): Promise<any> {
-  return import('../../midnight/managed/robin_private/contract/index.js');
+  try {
+    const modulePath = ['..', '..', 'midnight', 'managed', 'robin_private', 'contract', 'index.js'].join('/');
+    return await import(/* webpackIgnore: true */ modulePath);
+  } catch {
+    throw new Error(
+      'Midnight contract artifact not found (midnight/managed/robin_private). Run "npm run compile:fast" inside the midnight/ folder.'
+    );
+  }
 }
 
 /** The public id of an issuer key: the contract's own hash function, run locally. */
