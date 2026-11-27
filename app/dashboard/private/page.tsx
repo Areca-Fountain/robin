@@ -111,7 +111,7 @@ export default function PrivateLettersPage() {
   const keyMatches = Boolean(dbIssuer && issuerId && dbIssuer.issuer_id === issuerId);
   const registered = dbIssuer?.status === "registered" && keyMatches;
 
-  async function useSecret(hex: string) {
+  async function applySecret(hex: string) {
     saveIssuerSecret(companyId, hex);
     setSecret(hex);
     setIssuerId(await issuerIdOf(hex));
@@ -122,7 +122,7 @@ export default function PrivateLettersPage() {
     setNotice("");
     try {
       const hex = createIssuerSecret();
-      await useSecret(hex);
+      await applySecret(hex);
       const id = await issuerIdOf(hex);
       downloadText(
         `robin-issuer-key-${me!.company.name.replace(/\W+/g, "-")}.json`,
@@ -139,7 +139,7 @@ export default function PrivateLettersPage() {
     setError("");
     setNotice("");
     try {
-      await useSecret(parseIssuerBackup(await file.text()));
+      await applySecret(parseIssuerBackup(await file.text()));
       setNotice("Key imported into this browser.");
     } catch (e) {
       setError(errText(e));

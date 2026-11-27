@@ -8,9 +8,9 @@
   --color-robin-blue: #0088eb;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: "Switzer", var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-geist-sans);
+  --font-heading: "Switzer", var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -127,5 +127,154 @@
   }
   html {
     @apply font-sans;
+    scroll-behavior: smooth;
   }
+}
+
+/* ================================================================== */
+/* Robin home page motion (hero, navbar, reveals)                      */
+/* ================================================================== */
+
+/* --- starfield (components/animate-ui/backgrounds/stars.tsx) --- */
+@keyframes stars-drift {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(0, -2000px, 0); }
+}
+@keyframes stars-twinkle {
+  from { opacity: 0.55; }
+  to   { opacity: 1; }
+}
+
+/* --- glowing ray that runs around the badge border --- */
+@property --glow-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes glow-spin {
+  to { --glow-angle: 360deg; }
+}
+.glow-badge {
+  position: relative;
+  isolation: isolate;
+}
+.glow-badge::before,
+.glow-badge::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 2px;
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--glow-angle),
+    transparent 0deg,
+    transparent 235deg,
+    rgba(56, 189, 248, 0.15) 265deg,
+    #38bdf8 320deg,
+    #ffffff 352deg,
+    transparent 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  animation: glow-spin 3.4s linear infinite;
+}
+/* the blurred copy is the "shine" that spills outside the border */
+.glow-badge::after {
+  padding: 3px;
+  filter: blur(9px);
+  opacity: 0.95;
+  z-index: -1;
+}
+
+/* --- entrance animations --- */
+@keyframes rise {
+  from { opacity: 0; transform: translate3d(0, 24px, 0); filter: blur(6px); }
+  to   { opacity: 1; transform: none; filter: blur(0); }
+}
+.anim-rise {
+  opacity: 0;
+  animation: rise 0.95s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: var(--delay, 0s);
+}
+@keyframes line-rise {
+  from { transform: translate3d(0, 112%, 0); }
+  to   { transform: none; }
+}
+.anim-line {
+  display: inline-block;
+  transform: translate3d(0, 112%, 0);
+  animation: line-rise 1.05s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: var(--delay, 0s);
+}
+@keyframes mountain-rise {
+  from { opacity: 0; transform: translate3d(0, 90px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+.anim-mountain {
+  opacity: 0;
+  animation: mountain-rise 1.7s cubic-bezier(0.22, 1, 0.36, 1) 0.1s forwards;
+}
+@keyframes nav-drop {
+  from { opacity: 0; transform: translate3d(0, -18px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+.anim-nav-drop {
+  animation: nav-drop 0.8s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+}
+@keyframes dropdown-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+.animate-dropdown {
+  animation: dropdown-in 0.18s ease-out both;
+}
+
+/* --- scroll reveal (components/motion/Reveal.tsx) --- */
+.reveal {
+  opacity: 0;
+  transform: translate3d(0, 28px, 0);
+  transition:
+    opacity 0.8s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--delay, 0ms);
+}
+.reveal[data-visible="true"] {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .anim-rise, .anim-line, .anim-mountain, .anim-nav-drop, .animate-dropdown {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+  .reveal { opacity: 1; transform: none; transition: none; }
+  .glow-badge::before, .glow-badge::after { animation: none; }
+}
+
+
+/* --- GooeyNav recoloured to the Robin navbar (components/layout/Navbar.tsx) --- */
+/* The blob colour itself is the `color` prop in Navbar.tsx (it is drawn in WebGL).
+   These variables only recolour the link text. */
+.robin-gooey .gooey-nav {
+  --gn-ink: #0f3d8a !important;
+  --gn-muted: rgb(15 61 138 / 0.78) !important;
+  --gn-active-ink: #ffffff !important;
+}
+.robin-gooey .gooey-nav__fallback {
+  background: #0f3d8a !important;
+}
+/* Pages where none of the four links is current (dashboard, login...): no blob at all */
+.robin-gooey--none .gooey-nav__canvas,
+.robin-gooey--none .gooey-nav__fallback,
+.robin-gooey--none .gooey-nav__list--active {
+  display: none !important;
+}
+.robin-gooey--none .gooey-nav__item[data-active] .gooey-nav__link {
+  color: var(--gn-muted);
 }
