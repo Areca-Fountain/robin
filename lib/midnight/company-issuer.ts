@@ -6,6 +6,7 @@
 
 import { fromHex, isHex32, toHex, type ChainAttributes } from './credential';
 import { randomBytes32 } from '../../midnight/witnesses';
+import { loadRobinContractModule } from './load-contract';
 
 const storageKey = (companyId: string) => `robin-mn-issuer:${companyId}`;
 
@@ -31,7 +32,7 @@ export function createIssuerSecret(): string {
 }
 
 async function loadContractModule(): Promise<any> {
-  return import('../../midnight/managed/robin_private/contract/index.js');
+  return loadRobinContractModule();
 }
 
 /** The public id of an issuer key: the contract's own hash function, run locally. */

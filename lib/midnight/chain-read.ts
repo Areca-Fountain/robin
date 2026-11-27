@@ -6,12 +6,17 @@
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { MIDNIGHT_CONTRACT_ADDRESS, getDefaultMidnightUris } from './config';
 import { fromHex, toHex } from './credential';
+import { loadRobinContractModule } from './load-contract';
 
 const warned = new Set<string>();
 function warnOnce(name: string, e: unknown) {
   if (warned.has(name)) return;
   warned.add(name);
   console.warn('[chain-read] ledger attempt failed:', name, e);
+}
+
+async function loadCompiledContract(): Promise<any> {
+  return loadRobinContractModule();
 }
 
 /**
@@ -46,7 +51,7 @@ async function readLedger(): Promise<any> {
   const provider: any = indexerPublicDataProvider(uris.indexerUri, uris.indexerWsUri);
   const state = await provider.queryContractState(MIDNIGHT_CONTRACT_ADDRESS);
   if (!state) throw new Error('The contract was not found on the Midnight indexer yet.');
-  const mod: any = await import('../../midnight/managed/robin_private/contract/index.js');
+  const mod = await loadCompiledContract();
 
   const attempts: Array<[string, () => Promise<any> | any]> = [
     ['state.data', () => mod.ledger(state.data ?? state)],

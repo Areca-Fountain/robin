@@ -7,6 +7,7 @@ import {
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import { MIDNIGHT_CONTRACT_ADDRESS } from './config';
 import { buildBrowserMidnightProviders } from './providers';
+import { loadRobinContractModule } from './load-contract';
 import type { ConnectedMidnightWallet } from './lace-connector';
 import {
   witnesses,
@@ -29,11 +30,10 @@ const COMPANY_STATE_ID = 'robin-company-state';
 const EMPLOYEE_STATE_ID = 'robin-employee-state';
 
 async function loadCompiledContract() {
-  const contractModule = await import(
-    '../../midnight/managed/robin_private/contract/index.js'
-  );
+  const contractModule = await loadRobinContractModule();
+
   return CompiledContract.make('robin_private', contractModule.Contract).pipe(
-    CompiledContract.withWitnesses(witnesses),
+    CompiledContract.withWitnesses(witnesses as never),
     CompiledContract.withCompiledFileAssets('/midnight/managed/robin_private')
   );
 }
@@ -59,6 +59,7 @@ export async function deployRobinPrivate(
     txId: deployed.deployTxData.public.txId,
   };
 }
+
 // SDK 5.x may not expose `.set`; try the known names and log what exists.
 async function writePrivateState(
   provider: any,
@@ -94,7 +95,7 @@ async function join(
   }
   const providers = buildBrowserMidnightProviders(wallet);
   // Write the state BEFORE joining so a stale stored state never wins.
-    await writePrivateState(providers.privateStateProvider, stateId, state);
+  await writePrivateState(providers.privateStateProvider, stateId, state);
 
   const compiledContract = await loadCompiledContract();
   const deployed = await findDeployedContract(providers, {
