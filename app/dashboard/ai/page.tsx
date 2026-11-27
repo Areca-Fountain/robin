@@ -148,7 +148,7 @@ export default function GenerateWithRobinAiPage() {
       throw new Error("No wallet is connected to your company yet. Open Settings, connect your Lace wallet there, then come back.");
     }
     if (!connectedKey || !registeredKey || connectedKey !== registeredKey) {
-      throw new Error("This is not the wallet your company registered with. Switch to the registered wallet in Lace and connect again.");
+      throw new Error("This is not the wallet your company registered with. Switch to the registered wallet in Lace and connect again, or change the company wallet in Account Settings.");
     }
 
     walletRef.current = wallet;

@@ -172,7 +172,7 @@ export default function IssueLetterPage() {
     }
     if (!connectedKey || !registeredKey || connectedKey !== registeredKey) {
       throw new Error(
-        "This is not the wallet your company registered with. Switch to the registered wallet in Lace and connect again."
+        "This is not the wallet your company registered with. Switch to the registered wallet in Lace and connect again, or change the company wallet in Account Settings."
       );
     }
 

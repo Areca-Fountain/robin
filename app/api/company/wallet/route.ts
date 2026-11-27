@@ -1,23 +1,27 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCompany, requireOwner, errorResponse } from "@/lib/auth-server";
 import { addressToBytes, walletKey } from "@/lib/wallet-key";
-import { hasRealWallet } from "@/lib/wallet-status";
+import { hasRealWallet, WALLET_PLACEHOLDER } from "@/lib/wallet-status";
 
 /**
  * POST /api/company/wallet   (needs the Google login token)
- * Body: { walletAddress: string }
  *
- * Lets a company connect its Lace wallet when it has none on file yet
- * (companies submitted by a registrar start with a placeholder).
+ *   Connect or change:  { walletAddress: string }            (action defaults to "connect")
+ *                       { action: "connect", walletAddress }
+ *   Disconnect:         { action: "disconnect" }
+ *
+ * Lets a company connect its Lace wallet, replace it with a different one, or
+ * disconnect it (the company goes back to "no wallet connected").
  *
  * Rules:
  *  - only the primary or secondary account can do this (not team members)
- *  - only while the stored wallet is still the placeholder. Changing a real
- *    wallet later is a job for Robin's team.
  *  - the address must be a normal Lace wallet address on the Preprod test network
  *  - the same address cannot belong to two companies
+ *  - letters already issued keep the wallet that issued them. Only that wallet's
+ *    key can revoke them (the contract enforces this), so to revoke an old letter
+ *    the company switches back to that wallet.
  *
- * The update is conditional on the old value, so two clicks at once cannot
+ * Every update is conditional on the old value, so two clicks at once cannot
  * overwrite each other.
  */
 
@@ -46,7 +50,31 @@ export async function POST(req: Request) {
 
     const body = await req.json().catch(() => ({}));
     const bad = (error: string, status = 400) => Response.json({ error }, { status });
+    const supabase = getSupabaseAdmin();
 
+    // ---- Disconnect ----
+    if (body.action === "disconnect") {
+      if (!hasRealWallet(ctx.walletAddress)) {
+        return Response.json({ ok: true, walletAddress: WALLET_PLACEHOLDER });
+      }
+      const { data, error } = await supabase
+        .from("company_applications")
+        .update({ wallet_address: WALLET_PLACEHOLDER })
+        .eq("id", ctx.companyId)
+        .eq("wallet_address", ctx.walletAddress)
+        .select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        return bad("The company's wallet changed while you were disconnecting. Refresh and try again.", 409);
+      }
+      return Response.json({ ok: true, walletAddress: WALLET_PLACEHOLDER });
+    }
+
+    if (body.action !== undefined && body.action !== "connect") {
+      return bad("Unknown action.");
+    }
+
+    // ---- Connect / change ----
     const walletAddress =
       typeof body.walletAddress === "string" ? body.walletAddress.trim() : "";
     if (!walletAddress || walletAddress.length > 300) {
@@ -60,14 +88,9 @@ export async function POST(req: Request) {
       return bad("This company application was rejected, so a wallet cannot be connected.", 403);
     }
 
-    if (hasRealWallet(ctx.walletAddress)) {
-      return bad(
-        "Your company already has a wallet on file. To change it, contact Robin's team.",
-        409
-      );
+    if (hasRealWallet(ctx.walletAddress) && walletKey(ctx.walletAddress) === walletKey(walletAddress)) {
+      return bad("That wallet is already connected to your company.", 409);
     }
-
-    const supabase = getSupabaseAdmin();
 
     // The same wallet cannot be used by two companies
     const { data: taken, error: takenError } = await supabase
